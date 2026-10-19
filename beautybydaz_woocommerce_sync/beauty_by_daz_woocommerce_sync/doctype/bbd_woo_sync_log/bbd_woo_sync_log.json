@@ -1,0 +1,32 @@
+{
+  "doctype": "DocType",
+  "name": "BBD Woo Sync Log",
+  "module": "Beauty By Daz WooCommerce Sync",
+  "custom": 0,
+  "track_changes": 1,
+  "field_order": ["operation", "direction", "channel", "status", "external_id", "idempotency_key", "attempts", "reference_section", "reference_doctype", "reference_name", "timing_section", "started_at", "completed_at", "request_summary", "response_summary", "error", "traceback"],
+  "fields": [
+    {"fieldname": "operation", "label": "Operation", "fieldtype": "Select", "options": "Order\nRefund\nPrice\nStock\nNew Item\nMapping\nHealth", "reqd": 1, "in_list_view": 1},
+    {"fieldname": "direction", "label": "Direction", "fieldtype": "Select", "options": "Woo to ERP\nERP to Woo", "reqd": 1},
+    {"fieldname": "channel", "label": "Channel", "fieldtype": "Link", "options": "BBD Woo Channel", "in_list_view": 1},
+    {"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Running\nSuccess\nSkipped\nWarning\nFailed", "reqd": 1, "in_list_view": 1},
+    {"fieldname": "external_id", "label": "External ID", "fieldtype": "Data"},
+    {"fieldname": "idempotency_key", "label": "Idempotency Key", "fieldtype": "Data"},
+    {"fieldname": "attempts", "label": "Attempts", "fieldtype": "Int", "default": "1"},
+    {"fieldname": "reference_section", "label": "ERP Reference", "fieldtype": "Section Break"},
+    {"fieldname": "reference_doctype", "label": "Reference DocType", "fieldtype": "Link", "options": "DocType"},
+    {"fieldname": "reference_name", "label": "Reference Name", "fieldtype": "Dynamic Link", "options": "reference_doctype"},
+    {"fieldname": "timing_section", "label": "Timing and Evidence", "fieldtype": "Section Break"},
+    {"fieldname": "started_at", "label": "Started At", "fieldtype": "Datetime"},
+    {"fieldname": "completed_at", "label": "Completed At", "fieldtype": "Datetime"},
+    {"fieldname": "request_summary", "label": "Request Summary", "fieldtype": "Long Text"},
+    {"fieldname": "response_summary", "label": "Response Summary", "fieldtype": "Long Text"},
+    {"fieldname": "error", "label": "Error", "fieldtype": "Long Text"},
+    {"fieldname": "traceback", "label": "Traceback", "fieldtype": "Code"}
+  ],
+  "permissions": [
+    {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1},
+    {"role": "Stock Manager", "read": 1},
+    {"role": "Accounts Manager", "read": 1}
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "doctype": "DocType",
+  "name": "BBD Woo Sync Settings",
+  "module": "Beauty By Daz WooCommerce Sync",
+  "custom": 0,
+  "issingle": 1,
+  "editable_grid": 0,
+  "field_order": ["enabled", "company", "safe_paid_statuses", "order_poll_limit", "reconcile_limit", "alert_recipients", "payment_entries_enabled"],
+  "fields": [
+    {"fieldname": "enabled", "label": "Enabled", "fieldtype": "Check", "default": "0"},
+    {"fieldname": "company", "label": "Company", "fieldtype": "Link", "options": "Company", "reqd": 1},
+    {"fieldname": "safe_paid_statuses", "label": "Safe Paid Statuses", "fieldtype": "Small Text", "default": "processing,completed,on-hold", "description": "Comma-separated Woo statuses. date_paid is always required."},
+    {"fieldname": "order_poll_limit", "label": "Order Poll Limit", "fieldtype": "Int", "default": "100"},
+    {"fieldname": "reconcile_limit", "label": "Reconcile Limit", "fieldtype": "Int", "default": "500"},
+    {"fieldname": "alert_recipients", "label": "Failure Alert Recipients", "fieldtype": "Small Text", "description": "Comma-separated email addresses."},
+    {"fieldname": "payment_entries_enabled", "label": "Payment Entries Enabled", "fieldtype": "Check", "default": "0", "read_only": 1, "description": "Hard-disabled by design. This integration never creates Payment Entries."}
+  ],
+  "permissions": [
+    {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC"
+}

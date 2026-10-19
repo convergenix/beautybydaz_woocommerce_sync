@@ -1,0 +1,25 @@
+{
+  "doctype": "DocType",
+  "name": "BBD Woo Item Mapping",
+  "module": "Beauty By Daz WooCommerce Sync",
+  "custom": 0,
+  "autoname": "format:{channel}-{erp_item}",
+  "title_field": "erp_item",
+  "field_order": ["erp_item", "channel", "woo_product_id", "variation_id", "sku", "enabled", "last_verification_time", "last_verified_price", "last_verified_stock"],
+  "fields": [
+    {"fieldname": "erp_item", "label": "ERP Item", "fieldtype": "Link", "options": "Item", "reqd": 1, "in_list_view": 1},
+    {"fieldname": "channel", "label": "Channel", "fieldtype": "Link", "options": "BBD Woo Channel", "reqd": 1, "in_list_view": 1},
+    {"fieldname": "woo_product_id", "label": "Woo Product ID", "fieldtype": "Int", "reqd": 1, "in_list_view": 1},
+    {"fieldname": "variation_id", "label": "Variation ID", "fieldtype": "Int", "default": "0"},
+    {"fieldname": "sku", "label": "Woo SKU", "fieldtype": "Data", "reqd": 1},
+    {"fieldname": "enabled", "label": "Enabled", "fieldtype": "Check", "default": "1", "in_list_view": 1},
+    {"fieldname": "last_verification_time", "label": "Last Verification Time", "fieldtype": "Datetime", "read_only": 1},
+    {"fieldname": "last_verified_price", "label": "Last Verified Price", "fieldtype": "Currency", "read_only": 1},
+    {"fieldname": "last_verified_stock", "label": "Last Verified Stock", "fieldtype": "Float", "read_only": 1}
+  ],
+  "permissions": [
+    {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1},
+    {"role": "Stock Manager", "read": 1, "write": 1, "create": 1},
+    {"role": "Accounts Manager", "read": 1}
+  ]
+}
