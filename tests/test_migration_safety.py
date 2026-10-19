@@ -15,3 +15,12 @@ def test_channel_configuration_checks_live_product_api_not_system_status():
     source = (Path(__file__).parents[1] / "beautybydaz_woocommerce_sync" / "api.py").read_text()
     assert 'request("GET", "products", params={"per_page": 1})' in source
     assert 'request("GET", "system_status")' not in source
+
+
+def test_audit_operations_match_doctype_select_options():
+    root = Path(__file__).parents[1] / "beautybydaz_woocommerce_sync"
+    combined = (root / "orders.py").read_text() + (root / "catalog.py").read_text()
+    for obsolete in ("Order Import", "Refund Import", "Price Sync", "Stock Sync", "Draft Product Create"):
+        assert f'create_log("{obsolete}"' not in combined
+    for valid in ("Order", "Refund", "Price", "Stock", "New Item"):
+        assert f'create_log("{valid}"' in combined

@@ -43,7 +43,7 @@ def sync_price(mapping):
     channel = frappe.get_doc("BBD Woo Channel", mapping.channel)
     key = f"price:{channel.alias}:{mapping.erp_item}"
     with frappe.cache.lock(f"bbd-woo:{key}", timeout=180):
-        log = create_log("Price Sync", "ERP to Woo", channel.alias, mapping.erp_item, key, {"item": mapping.erp_item, "price_list": channel.price_list})
+        log = create_log("Price", "ERP to Woo", channel.alias, mapping.erp_item, key, {"item": mapping.erp_item, "price_list": channel.price_list})
         try:
             rate = item_price(mapping.erp_item, channel.price_list)
             if rate is None:
@@ -67,7 +67,7 @@ def sync_stock(mapping):
     key = f"stock:{channel.alias}:{mapping.erp_item}"
     with frappe.cache.lock(f"bbd-woo:{key}", timeout=180):
         qty = actual_qty(mapping.erp_item, channel.warehouse)
-        log = create_log("Stock Sync", "ERP to Woo", channel.alias, mapping.erp_item, key, {"item": mapping.erp_item, "warehouse": channel.warehouse, "actual_qty": str(qty)})
+        log = create_log("Stock", "ERP to Woo", channel.alias, mapping.erp_item, key, {"item": mapping.erp_item, "warehouse": channel.warehouse, "actual_qty": str(qty)})
         try:
             client = WooClient(channel)
             readback = client.update_product(mapping.woo_product_id, mapping.variation_id or 0, stock_payload(qty))
@@ -114,7 +114,7 @@ def create_draft_product(item_code, channel):
     )
     key = f"new-item:{channel.alias}:{item_code}"
     with frappe.cache.lock(f"bbd-woo:{key}", timeout=300):
-        log = create_log("Draft Product Create", "ERP to Woo", channel.alias, item_code, key, {"payload": payload, "warnings": warnings})
+        log = create_log("New Item", "ERP to Woo", channel.alias, item_code, key, {"payload": payload, "warnings": warnings})
         try:
             readback = WooClient(channel).create_product(payload)
             if readback.get("status") != "draft":

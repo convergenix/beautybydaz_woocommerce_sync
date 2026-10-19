@@ -234,7 +234,7 @@ def import_paid_order(channel, order, *, client=None):
     order_id = int(order["id"])
     key = f"order:{channel.alias}:{order_id}"
     with frappe.cache.lock(f"bbd-woo:{key}", timeout=300):
-        log = create_log("Order Import", "Woo to ERP", channel.alias, order_id, key, {"id": order_id, "status": order.get("status")})
+        log = create_log("Order", "Woo to ERP", channel.alias, order_id, key, {"id": order_id, "status": order.get("status")})
         try:
             if order_id < int(channel.order_floor or 0):
                 finish_log(log, "Skipped", {"reason": "below channel order floor"})
@@ -291,7 +291,7 @@ def import_refund(channel, order, refund):
     refund_id = int(refund["id"])
     key = f"refund:{channel.alias}:{refund_id}"
     with frappe.cache.lock(f"bbd-woo:{key}", timeout=300):
-        log = create_log("Refund Import", "Woo to ERP", channel.alias, refund_id, key, {"order_id": order["id"], "refund_id": refund_id})
+        log = create_log("Refund", "Woo to ERP", channel.alias, refund_id, key, {"order_id": order["id"], "refund_id": refund_id})
         try:
             if decimal_value(refund.get("amount")) <= 0:
                 finish_log(log, "Skipped", {"reason": "zero-value refund"})
