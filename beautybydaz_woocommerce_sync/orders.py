@@ -273,7 +273,14 @@ def _return_doc(channel, order, refund, doctype, maker):
         frappe.throw(f"Cannot import refund {target_id}: submitted {doctype} for order {order['id']} was not found")
     doc = maker(original)
     _base_fields(doc, channel, order, target_id)
-    refund_lines = {str(x.get("id")): x for x in refund.get("line_items") or []}
+    refund_lines = {}
+    for detail in refund.get("line_items") or []:
+        source_id = None
+        for meta in detail.get("meta_data") or []:
+            if meta.get("key") in {"_refunded_item_id", "refunded_item_id", "_line_item_id"} and meta.get("value"):
+                source_id = str(meta.get("value"))
+                break
+        refund_lines[source_id or str(detail.get("id"))] = detail
     if refund_lines:
         keep = []
         for row in doc.items:

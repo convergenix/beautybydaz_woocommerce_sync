@@ -50,3 +50,9 @@ def test_reconciliation_rotates_in_bounded_long_queue_batches():
     assert "min(max(int(limit or settings.reconcile_limit or 50), 1), 100)" in catalog
     assert 'queue="long"' in jobs
     assert 'job_id="bbd-woo:catalog-reconcile"' in jobs
+
+
+def test_refunds_map_using_woocommerce_refunded_item_metadata():
+    orders = (Path(__file__).parents[1] / "beautybydaz_woocommerce_sync" / "orders.py").read_text()
+    assert '"_refunded_item_id"' in orders
+    assert "refund_lines[source_id or str(detail.get(\"id\"))]" in orders
