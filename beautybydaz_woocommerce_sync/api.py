@@ -79,8 +79,11 @@ def configure_from_file(path: str, enable: int = 0):
         doc.timeout_seconds = 45
         doc.max_retries = 3
         doc.save(ignore_permissions=True) if doc.name else doc.insert(ignore_permissions=True)
-        response = WooClient(doc).request("GET", "system_status")
-        result[alias] = {"configured": True, "enabled": bool(doc.enabled), "woocommerce_version": response.get("environment", {}).get("version")}
+        # Some production Woo installations return HTTP 500 from system_status
+        # even while the authenticated product/order API is healthy. Validate the
+        # exact API surface this app uses instead.
+        response = WooClient(doc).request("GET", "products", params={"per_page": 1})
+        result[alias] = {"configured": True, "enabled": bool(doc.enabled), "api_reachable": isinstance(response, list)}
     return result
 
 
