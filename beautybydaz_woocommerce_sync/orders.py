@@ -297,6 +297,21 @@ def _return_doc(channel, order, refund, doctype, maker):
         doc.set("items", keep)
     if not doc.items:
         frappe.throw(f"Refund {target_id} has no mappable line items")
+    doc.set("taxes", [])
+    for fieldname, value in (
+        ("shipping_rule", None),
+        ("coupon_code", None),
+        ("additional_discount_percentage", 0),
+        ("discount_amount", 0),
+        ("base_discount_amount", 0),
+    ):
+        if doc.meta.has_field(fieldname):
+            doc.set(fieldname, value)
+    doc.calculate_taxes_and_totals()
+    expected = abs(decimal_value(refund.get("amount")))
+    actual = abs(decimal_value(doc.grand_total))
+    if abs(expected - actual) > decimal_value("0.01"):
+        frappe.throw(f"Refund {target_id} total mismatch: Woo={expected}, {doctype}={actual}")
     doc.insert(ignore_permissions=True)
     doc.submit()
     return doc

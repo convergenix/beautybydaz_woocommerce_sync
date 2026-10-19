@@ -56,3 +56,5 @@ def test_refunds_map_using_woocommerce_refunded_item_metadata():
     orders = (Path(__file__).parents[1] / "beautybydaz_woocommerce_sync" / "orders.py").read_text()
     assert '"_refunded_item_id"' in orders
     assert "refund_lines[source_id or str(detail.get(\"id\"))]" in orders
+    assert 'doc.set("taxes", [])' in orders
+    assert "Refund {target_id} total mismatch" in orders
