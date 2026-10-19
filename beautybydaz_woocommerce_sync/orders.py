@@ -210,6 +210,14 @@ def _create_delivery_note(channel, order, so):
     for row in dn.items:
         row.warehouse = channel.warehouse
     dn.insert(ignore_permissions=True)
+    if channel.allow_negative_stock_on_paid_orders:
+        from types import MethodType
+        from erpnext.controllers.selling_controller import SellingController
+
+        def update_stock_ledger_for_paid_woo_order(self, allow_negative_stock=False):
+            return SellingController.update_stock_ledger(self, allow_negative_stock=True)
+
+        dn.update_stock_ledger = MethodType(update_stock_ledger_for_paid_woo_order, dn)
     dn.submit()
     return dn
 

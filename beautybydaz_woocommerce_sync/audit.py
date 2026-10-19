@@ -24,6 +24,8 @@ def create_log(operation, direction, channel=None, external_id=None, idempotency
         }
     )
     doc.insert(ignore_permissions=True)
+    # The business operation may roll back, but its audit trail must survive.
+    frappe.db.commit()
     return doc
 
 

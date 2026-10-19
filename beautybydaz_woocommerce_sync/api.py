@@ -22,6 +22,7 @@ ROUTING = {
         "shipping_income_account": "4130 - Retail Income - BBD",
         "cost_center": "Main - BBD",
         "order_floor": 158334,
+        "allow_negative_stock_on_paid_orders": 1,
     },
     "beautybydaz_wholesale_ngn": {
         "company": "BeautybyDaz",
@@ -32,6 +33,7 @@ ROUTING = {
         "shipping_income_account": "4140 - Wholesale Income - BBD",
         "cost_center": "Main - BBD",
         "order_floor": 62513,
+        "allow_negative_stock_on_paid_orders": 1,
     },
 }
 

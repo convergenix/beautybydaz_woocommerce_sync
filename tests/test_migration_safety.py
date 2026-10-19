@@ -24,3 +24,12 @@ def test_audit_operations_match_doctype_select_options():
         assert f'create_log("{obsolete}"' not in combined
     for valid in ("Order", "Refund", "Price", "Stock", "New Item"):
         assert f'create_log("{valid}"' in combined
+
+
+def test_paid_order_negative_stock_override_is_scoped_and_audit_is_durable():
+    root = Path(__file__).parents[1] / "beautybydaz_woocommerce_sync"
+    orders = (root / "orders.py").read_text()
+    audit = (root / "audit.py").read_text()
+    assert "allow_negative_stock_on_paid_orders" in orders
+    assert "SellingController.update_stock_ledger(self, allow_negative_stock=True)" in orders
+    assert "frappe.db.commit()" in audit
