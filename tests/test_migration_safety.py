@@ -33,3 +33,10 @@ def test_paid_order_negative_stock_override_is_scoped_and_audit_is_durable():
     assert "allow_negative_stock_on_paid_orders" in orders
     assert "SellingController.update_stock_ledger(self, allow_negative_stock=True)" in orders
     assert audit.count("frappe.db.commit()") >= 2
+
+
+def test_new_item_creation_defers_sku_until_after_draft_readback():
+    source = (Path(__file__).parents[1] / "beautybydaz_woocommerce_sync" / "catalog.py").read_text()
+    assert 'sku = create_payload.pop("sku")' in source
+    assert 'client.create_product(create_payload)' in source
+    assert 'client.update_product(readback["id"], 0, {"sku": sku})' in source

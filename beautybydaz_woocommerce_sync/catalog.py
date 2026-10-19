@@ -116,7 +116,15 @@ def create_draft_product(item_code, channel):
     with frappe.cache.lock(f"bbd-woo:{key}", timeout=300):
         log = create_log("New Item", "ERP to Woo", channel.alias, item_code, key, {"payload": payload, "warnings": warnings})
         try:
-            readback = WooClient(channel).create_product(payload)
+            client = WooClient(channel)
+            # The wholesale site's product lookup table can reserve a SKU when a
+            # create request fails mid-transaction. Create the unpublished shell
+            # without a SKU, read it back, then set the exact deterministic SKU
+            # in a separately read-backed write.
+            create_payload = dict(payload)
+            sku = create_payload.pop("sku")
+            readback = client.create_product(create_payload)
+            readback = client.update_product(readback["id"], 0, {"sku": sku})
             if readback.get("status") != "draft":
                 raise WooReadbackError(f"new product {readback.get('id')} is {readback.get('status')}, not draft")
             if str(readback.get("sku") or "") != item.item_code:
