@@ -40,3 +40,13 @@ def test_new_item_creation_defers_sku_until_after_draft_readback():
     assert 'sku = create_payload.pop("sku")' in source
     assert 'client.create_product(create_payload)' in source
     assert 'client.update_product(readback["id"], 0, {"sku": sku})' in source
+
+
+def test_reconciliation_rotates_in_bounded_long_queue_batches():
+    root = Path(__file__).parents[1] / "beautybydaz_woocommerce_sync"
+    catalog = (root / "catalog.py").read_text()
+    jobs = (root / "jobs.py").read_text()
+    assert "last_verification_time asc" in catalog
+    assert "min(max(int(limit or settings.reconcile_limit or 50), 1), 100)" in catalog
+    assert 'queue="long"' in jobs
+    assert 'job_id="bbd-woo:catalog-reconcile"' in jobs

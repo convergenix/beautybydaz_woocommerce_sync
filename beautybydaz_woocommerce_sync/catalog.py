@@ -173,7 +173,14 @@ def verify_mapping(mapping):
 
 def reconcile(limit=None):
     settings = frappe.get_single("BBD Woo Sync Settings")
-    rows = frappe.get_all("BBD Woo Item Mapping", filters={"enabled": 1}, pluck="name", order_by="modified asc", limit=int(limit or settings.reconcile_limit or 500))
+    batch_limit = min(max(int(limit or settings.reconcile_limit or 50), 1), 100)
+    rows = frappe.get_all(
+        "BBD Woo Item Mapping",
+        filters={"enabled": 1},
+        pluck="name",
+        order_by="last_verification_time asc, modified asc",
+        limit=batch_limit,
+    )
     result = {"price": 0, "stock": 0, "errors": []}
     for name in rows:
         mapping = frappe.get_doc("BBD Woo Item Mapping", name)

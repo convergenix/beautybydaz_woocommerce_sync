@@ -71,7 +71,7 @@ def ensure_settings():
     if not settings.order_poll_limit:
         settings.order_poll_limit = 100
     if not settings.reconcile_limit:
-        settings.reconcile_limit = 500
+        settings.reconcile_limit = 50
     settings.save(ignore_permissions=True)
 
 

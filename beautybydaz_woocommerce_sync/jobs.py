@@ -24,7 +24,13 @@ def poll_paid_orders():
 def reconcile_catalog():
     if not get_settings().enabled:
         return {"status": "disabled"}
-    return reconcile()
+    job = frappe.enqueue(
+        "beautybydaz_woocommerce_sync.catalog.reconcile",
+        queue="long",
+        enqueue_after_commit=False,
+        job_id="bbd-woo:catalog-reconcile",
+    )
+    return {"status": "queued" if job else "already_queued"}
 
 
 def _enqueue(method, **kwargs):
