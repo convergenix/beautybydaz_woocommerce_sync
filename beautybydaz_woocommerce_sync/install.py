@@ -81,12 +81,12 @@ def _index_exists(table, name):
 
 def _add_unique(table, name, columns):
     if not _index_exists(table, name):
-        frappe.db.sql(f"ALTER TABLE `{table}` ADD UNIQUE INDEX `{name}` ({','.join('`'+c+'`' for c in columns)})")
+        frappe.db.add_unique(table.removeprefix("tab"), columns, constraint_name=name)
 
 
 def _add_index(table, name, columns):
     if not _index_exists(table, name):
-        frappe.db.sql(f"ALTER TABLE `{table}` ADD INDEX `{name}` ({','.join('`'+c+'`' for c in columns)})")
+        frappe.db.add_index(table.removeprefix("tab"), columns, index_name=name)
 
 
 def ensure_indexes():
