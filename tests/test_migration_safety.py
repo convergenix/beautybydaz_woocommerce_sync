@@ -32,4 +32,4 @@ def test_paid_order_negative_stock_override_is_scoped_and_audit_is_durable():
     audit = (root / "audit.py").read_text()
     assert "allow_negative_stock_on_paid_orders" in orders
     assert "SellingController.update_stock_ledger(self, allow_negative_stock=True)" in orders
-    assert "frappe.db.commit()" in audit
+    assert audit.count("frappe.db.commit()") >= 2

@@ -38,6 +38,7 @@ def finish_log(doc, status, response=None, reference_doctype=None, reference_nam
     doc.error = str(error or "")[:10000]
     doc.traceback = str(traceback_text or "")[:20000]
     doc.save(ignore_permissions=True)
+    frappe.db.commit()
     if status == "Failed":
         frappe.log_error(title=f"BBD Woo Sync {doc.operation} failed", message=doc.error + "\n" + doc.traceback)
         _send_failure_alert(doc)
