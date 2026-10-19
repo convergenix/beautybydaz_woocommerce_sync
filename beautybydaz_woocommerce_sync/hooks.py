@@ -18,15 +18,28 @@ scheduler_events = {
 
 doc_events = {
     "Item Price": {
-        "after_insert": "beautybydaz_woocommerce_sync.events.item_price_changed",
-        "on_update": "beautybydaz_woocommerce_sync.events.item_price_changed",
+        "after_insert": "beautybydaz_woocommerce_sync.jobs.on_item_price_change",
+        "on_update": "beautybydaz_woocommerce_sync.jobs.on_item_price_change",
     },
-    "Item": {
-        "after_insert": "beautybydaz_woocommerce_sync.events.item_created",
+    "Item": {"after_insert": "beautybydaz_woocommerce_sync.jobs.on_item_insert"},
+    "Stock Entry": {
+        "on_submit": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction",
+        "on_cancel": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction_cancel",
     },
-    "Stock Entry": {"on_submit": "beautybydaz_woocommerce_sync.events.stock_document_submitted"},
-    "Purchase Receipt": {"on_submit": "beautybydaz_woocommerce_sync.events.stock_document_submitted"},
-    "Delivery Note": {"on_submit": "beautybydaz_woocommerce_sync.events.stock_document_submitted"},
-    "Stock Reconciliation": {"on_submit": "beautybydaz_woocommerce_sync.events.stock_document_submitted"},
-    "Sales Invoice": {"on_submit": "beautybydaz_woocommerce_sync.events.sales_invoice_submitted"},
+    "Purchase Receipt": {
+        "on_submit": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction",
+        "on_cancel": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction_cancel",
+    },
+    "Delivery Note": {
+        "on_submit": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction",
+        "on_cancel": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction_cancel",
+    },
+    "Stock Reconciliation": {
+        "on_submit": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction",
+        "on_cancel": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction_cancel",
+    },
+    "Sales Invoice": {
+        "on_submit": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction",
+        "on_cancel": "beautybydaz_woocommerce_sync.jobs.on_stock_transaction_cancel",
+    },
 }
