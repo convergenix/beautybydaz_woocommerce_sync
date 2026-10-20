@@ -21,7 +21,7 @@ ROUTING = {
         "income_account": "4130 - Retail Income - BBD",
         "shipping_income_account": "4130 - Retail Income - BBD",
         "cost_center": "Main - BBD",
-        "order_floor": 158334,
+        "order_floor": 158359,
         "allow_negative_stock_on_paid_orders": 1,
     },
     "beautybydaz_wholesale_ngn": {
@@ -32,7 +32,7 @@ ROUTING = {
         "income_account": "4140 - Wholesale Income - BBD",
         "shipping_income_account": "4140 - Wholesale Income - BBD",
         "cost_center": "Main - BBD",
-        "order_floor": 62513,
+        "order_floor": 62521,
         "allow_negative_stock_on_paid_orders": 1,
     },
 }
@@ -96,7 +96,6 @@ def enable_sync():
         frappe.db.set_value("BBD Woo Channel", name, "enabled", 1, update_modified=False)
     settings = frappe.get_single("BBD Woo Sync Settings")
     settings.enabled = 1
-    settings.payment_entries_enabled = 0
     settings.save(ignore_permissions=True)
     return health_check()
 
@@ -184,7 +183,7 @@ def health_check():
     )
     return {
         "enabled": bool(settings.enabled),
-        "payment_entries_enabled": False,
+        "payment_entries_enabled": bool(settings.payment_entries_enabled),
         "channels": channels,
         "mapping_count": frappe.db.count("BBD Woo Item Mapping", {"enabled": 1}),
         "failed_logs": frappe.db.count("BBD Woo Sync Log", {"status": "Failed"}),

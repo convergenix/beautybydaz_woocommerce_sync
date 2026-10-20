@@ -7,7 +7,8 @@ Production Frappe v15 app for deterministic, channel-separated synchronization b
 - Imports paid orders only.
 - Uses explicit per-channel product/variation mappings; no fuzzy matching.
 - Keeps retail and wholesale price lists and warehouses separate.
-- Never creates Payment Entries.
+- Creates Payment Entries only when explicitly enabled after validation and only for mapped Paystack/Nomba paid orders.
+- Never defaults an unknown payment gateway and never creates automatic cash-refund payments.
 - Writes only `regular_price` for price synchronization.
 - Reads back and validates every WooCommerce write.
 - Creates all new WooCommerce products as drafts.
@@ -26,7 +27,7 @@ Production Frappe v15 app for deterministic, channel-separated synchronization b
 python -m pytest -q
 ```
 
-The test suite covers paid-status validation, channel/order idempotency, retail/wholesale stock isolation, variations, retry behavior, refunds, draft-only product creation, Payment Entry prohibition, and failed read-back detection.
+The test suite covers paid-status validation, channel/order/payment idempotency, Paystack and Nomba routing, unknown gateways, payment amount/currency validation, duplicate/existing Payment Entry decisions, retail/wholesale stock isolation, variations, retry behavior, refunds, draft-only product creation, and failed read-back detection.
 
 ## Deployment
 

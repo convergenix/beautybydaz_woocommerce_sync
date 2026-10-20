@@ -13,7 +13,7 @@
     {"fieldname": "order_poll_limit", "label": "Order Poll Limit", "fieldtype": "Int", "default": "100"},
     {"fieldname": "reconcile_limit", "label": "Reconcile Limit", "fieldtype": "Int", "default": "50"},
     {"fieldname": "alert_recipients", "label": "Failure Alert Recipients", "fieldtype": "Small Text", "description": "Comma-separated email addresses."},
-    {"fieldname": "payment_entries_enabled", "label": "Payment Entries Enabled", "fieldtype": "Check", "default": "0", "read_only": 1, "description": "Hard-disabled by design. This integration never creates Payment Entries."}
+    {"fieldname": "payment_entries_enabled", "label": "Payment Entries Enabled", "fieldtype": "Check", "default": "0", "description": "Create submitted Payment Entries for validated paid Woo orders using explicit gateway mappings."}
   ],
   "permissions": [
     {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}

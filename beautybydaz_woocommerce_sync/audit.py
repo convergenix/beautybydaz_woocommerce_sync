@@ -30,11 +30,17 @@ def create_log(operation, direction, channel=None, external_id=None, idempotency
 
 
 def finish_log(doc, status, response=None, reference_doctype=None, reference_name=None, error=None, traceback_text=None):
+    response = response or {}
     doc.status = status
     doc.completed_at = now_datetime()
-    doc.response_summary = json.dumps(safe_summary(response or {}), default=str)
+    doc.response_summary = json.dumps(safe_summary(response), default=str)
     doc.reference_doctype = reference_doctype
     doc.reference_name = reference_name
+    if isinstance(response, dict):
+        doc.sales_invoice = response.get("sales_invoice")
+        doc.payment_gateway = response.get("payment_gateway")
+        doc.payment_amount = response.get("payment_amount")
+        doc.payment_entry = response.get("payment_entry")
     doc.error = str(error or "")[:10000]
     doc.traceback = str(traceback_text or "")[:20000]
     doc.save(ignore_permissions=True)

@@ -5,6 +5,18 @@ from typing import Any
 
 PAID_STATUSES = {"processing", "completed", "on-hold"}
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+PAYMENT_GATEWAY_ROUTES = {
+    "paystack": {
+        "gateway": "Paystack",
+        "mode_of_payment": "Paystack",
+        "clearing_account": "1121 - Paystack Clearing - BBD",
+    },
+    "nomba": {
+        "gateway": "Nomba",
+        "mode_of_payment": "Nomba",
+        "clearing_account": "1122 - Nomba Clearing - BBD",
+    },
+}
 
 
 def decimal_value(value: Any) -> Decimal:
@@ -82,6 +94,52 @@ def refund_idempotency_key(channel: str, refund_id: Any) -> str:
     return f"refund:{channel}:{int(refund_id)}"
 
 
+def payment_idempotency_key(channel: str, order_id: Any, invoice: str) -> str:
+    return f"payment:{channel}:{int(order_id)}:{invoice}"
+
+
+def resolve_payment_route(order: dict[str, Any]) -> dict[str, str]:
+    gateway_text = " ".join(
+        str(order.get(field) or "").strip().lower()
+        for field in ("payment_method", "payment_method_title")
+    )
+    matches = [key for key in PAYMENT_GATEWAY_ROUTES if key in gateway_text]
+    if len(matches) != 1:
+        raw = (order.get("payment_method") or order.get("payment_method_title") or "unknown")
+        raise ValueError(f"Unsupported Woo payment gateway {raw!r}; configure an explicit gateway mapping")
+    return dict(PAYMENT_GATEWAY_ROUTES[matches[0]])
+
+
+def validate_payment_values(
+    order: dict[str, Any],
+    invoice_outstanding: Any,
+    invoice_currency: str,
+) -> Decimal:
+    if not order.get("date_paid"):
+        raise ValueError(f"Woo order {order.get('id')} has no date_paid")
+    woo_currency = str(order.get("currency") or "").upper()
+    erp_currency = str(invoice_currency or "").upper()
+    if woo_currency != "NGN" or erp_currency != "NGN":
+        raise ValueError(
+            f"Payment currency must be NGN: Woo={woo_currency or 'blank'}, ERP={erp_currency or 'blank'}"
+        )
+    woo_total = decimal_value(order.get("total"))
+    outstanding = decimal_value(invoice_outstanding)
+    if woo_total <= 0:
+        raise ValueError(f"Woo order {order.get('id')} has invalid paid total {woo_total}")
+    if woo_total != outstanding:
+        raise ValueError(
+            f"Payment amount mismatch for Woo order {order.get('id')}: Woo={woo_total}, ERP outstanding={outstanding}"
+        )
+    return woo_total
+
+
+def payment_sync_decision(existing_payment_entry: str | None) -> tuple[str, str | None]:
+    if existing_payment_entry:
+        return "existing", existing_payment_entry
+    return "create", None
+
+
 def verify_regular_price(readback: dict[str, Any], expected: Any) -> None:
     got = decimal_value(readback.get("regular_price"))
     want = decimal_value(expected)
@@ -135,6 +193,5 @@ def safe_summary(value: Any, depth: int = 0) -> Any:
     return value
 
 
-def payment_entries_are_enabled() -> bool:
-    """Hard safety boundary: this integration never creates Payment Entries."""
-    return False
+def payment_entries_are_enabled(value: Any = 0) -> bool:
+    return bool(int(value or 0))

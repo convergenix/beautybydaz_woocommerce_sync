@@ -8,15 +8,19 @@ from beautybydaz_woocommerce_sync.core import (
     new_product_payload,
     order_idempotency_key,
     payment_entries_are_enabled,
+    payment_idempotency_key,
+    payment_sync_decision,
     price_payload,
     product_endpoint,
     refund_idempotency_key,
     refund_line_quantities,
     retry_delays,
+    resolve_payment_route,
     safe_summary,
     stock_payload,
     verify_regular_price,
     verify_stock_readback,
+    validate_payment_values,
 )
 
 
@@ -70,8 +74,58 @@ def test_refund_quantities_and_retries():
     assert retry_delays(4, 0.5) == [0.5, 1.0, 2.0, 4.0]
 
 
-def test_sensitive_values_are_redacted_and_payment_entry_is_disabled():
+def test_sensitive_values_are_redacted_and_payment_switch_is_explicit():
     value = safe_summary({"consumer_key": "secret", "nested": {"password": "secret"}})
     assert value["consumer_key"] == "[REDACTED]"
     assert value["nested"]["password"] == "[REDACTED]"
     assert payment_entries_are_enabled() is False
+    assert payment_entries_are_enabled(1) is True
+
+
+def test_paystack_and_nomba_payment_routes():
+    paystack = resolve_payment_route({"payment_method": "paystack", "payment_method_title": "Paystack"})
+    assert paystack == {
+        "gateway": "Paystack",
+        "mode_of_payment": "Paystack",
+        "clearing_account": "1121 - Paystack Clearing - BBD",
+    }
+    nomba = resolve_payment_route({"payment_method": "nomba_card", "payment_method_title": "Nomba"})
+    assert nomba == {
+        "gateway": "Nomba",
+        "mode_of_payment": "Nomba",
+        "clearing_account": "1122 - Nomba Clearing - BBD",
+    }
+
+
+def test_unknown_payment_gateway_fails_safely():
+    with pytest.raises(ValueError, match="Unsupported Woo payment gateway"):
+        resolve_payment_route({"payment_method": "bank_transfer", "payment_method_title": "Bank Transfer"})
+
+
+def test_payment_amount_currency_and_date_are_validated():
+    order = {
+        "id": 158359,
+        "date_paid": "2026-10-20T10:00:00",
+        "currency": "NGN",
+        "total": "92350.00",
+    }
+    assert validate_payment_values(order, "92350.00", "NGN") == Decimal("92350.00")
+    with pytest.raises(ValueError, match="amount mismatch"):
+        validate_payment_values(order, "90000.00", "NGN")
+    with pytest.raises(ValueError, match="must be NGN"):
+        validate_payment_values({**order, "currency": "USD"}, "92350.00", "NGN")
+    with pytest.raises(ValueError, match="no date_paid"):
+        validate_payment_values({**order, "date_paid": None}, "92350.00", "NGN")
+
+
+def test_payment_retry_uses_channel_order_and_invoice_boundary():
+    key = payment_idempotency_key("beautybydaz", 158359, "ACC-SINV-2026-00045")
+    assert key == "payment:beautybydaz:158359:ACC-SINV-2026-00045"
+    assert payment_sync_decision(None) == ("create", None)
+    assert payment_sync_decision("ACC-PAY-2026-00001") == (
+        "existing",
+        "ACC-PAY-2026-00001",
+    )
+    assert payment_sync_decision("ACC-PAY-2026-00001") == payment_sync_decision(
+        "ACC-PAY-2026-00001"
+    )

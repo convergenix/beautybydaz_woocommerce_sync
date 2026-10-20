@@ -65,7 +65,6 @@ def ensure_settings():
     settings = frappe.get_single("BBD Woo Sync Settings")
     if not settings.company and frappe.db.exists("Company", "BeautybyDaz"):
         settings.company = "BeautybyDaz"
-    settings.payment_entries_enabled = 0
     if not settings.safe_paid_statuses:
         settings.safe_paid_statuses = "processing,completed,on-hold"
     if not settings.order_poll_limit:

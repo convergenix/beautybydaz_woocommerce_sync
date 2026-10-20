@@ -8,7 +8,15 @@ from frappe.utils import getdate, nowdate
 from .audit import create_log, finish_log
 from .client import WooClient
 from .config import safe_statuses
-from .core import decimal_value, is_paid_order
+from .core import (
+    decimal_value,
+    is_paid_order,
+    payment_entries_are_enabled,
+    payment_idempotency_key,
+    payment_sync_decision,
+    resolve_payment_route,
+    validate_payment_values,
+)
 from .mapping import get_mapping
 
 
@@ -238,11 +246,158 @@ def _create_sales_invoice(channel, order, so):
     return invoice
 
 
+def _existing_payment_entry(invoice_name):
+    rows = frappe.db.sql(
+        """
+        SELECT pe.name
+        FROM `tabPayment Entry` pe
+        INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+        WHERE per.reference_doctype = 'Sales Invoice'
+          AND per.reference_name = %s
+          AND pe.docstatus < 2
+        ORDER BY pe.docstatus DESC, pe.creation ASC
+        LIMIT 1
+        """,
+        (invoice_name,),
+        as_dict=True,
+    )
+    return rows[0].name if rows else None
+
+
+def _validate_payment_master_data(channel, route):
+    mode_enabled = frappe.db.get_value("Mode of Payment", route["mode_of_payment"], "enabled")
+    if mode_enabled is None:
+        frappe.throw(f"Mode of Payment does not exist: {route['mode_of_payment']}")
+    if not int(mode_enabled):
+        frappe.throw(f"Mode of Payment is disabled: {route['mode_of_payment']}")
+
+    account = frappe.db.get_value(
+        "Account",
+        route["clearing_account"],
+        ["name", "company", "disabled", "is_group"],
+        as_dict=True,
+    )
+    if not account:
+        frappe.throw(f"Clearing account does not exist: {route['clearing_account']}")
+    if account.company != channel.company:
+        frappe.throw(
+            f"Clearing account {account.name} belongs to {account.company}, not {channel.company}"
+        )
+    if int(account.disabled or 0):
+        frappe.throw(f"Clearing account is disabled: {account.name}")
+    if int(account.is_group or 0):
+        frappe.throw(f"Clearing account must be a ledger account: {account.name}")
+
+
+def _validate_existing_payment(pe, route, amount, invoice_name):
+    if pe.docstatus == 0:
+        frappe.throw(
+            f"Draft Payment Entry {pe.name} already references {invoice_name}; review or submit it before retrying"
+        )
+    if pe.mode_of_payment != route["mode_of_payment"] or pe.paid_to != route["clearing_account"]:
+        frappe.throw(
+            f"Existing Payment Entry {pe.name} uses {pe.mode_of_payment}/{pe.paid_to}, "
+            f"expected {route['mode_of_payment']}/{route['clearing_account']}"
+        )
+    allocated = sum(
+        decimal_value(row.allocated_amount)
+        for row in pe.references
+        if row.reference_doctype == "Sales Invoice" and row.reference_name == invoice_name
+    )
+    if allocated != amount:
+        frappe.throw(
+            f"Existing Payment Entry {pe.name} allocated {allocated} to {invoice_name}; expected {amount}"
+        )
+    return pe
+
+
+def _create_payment_entry(channel, order, invoice):
+    if invoice.docstatus != 1:
+        frappe.throw(f"Sales Invoice {invoice.name} must be submitted before payment synchronization")
+    if str(getattr(invoice, "custom_woo_channel", "") or "") != channel.alias:
+        frappe.throw(
+            f"Sales Invoice {invoice.name} Woo channel mismatch: "
+            f"{getattr(invoice, 'custom_woo_channel', None)!r} != {channel.alias!r}"
+        )
+    if str(getattr(invoice, "custom_woocommerce_order_id", "") or "") != str(order["id"]):
+        frappe.throw(
+            f"Sales Invoice {invoice.name} Woo order mismatch: "
+            f"{getattr(invoice, 'custom_woocommerce_order_id', None)!r} != {order['id']!r}"
+        )
+
+    route = resolve_payment_route(order)
+    _validate_payment_master_data(channel, route)
+    existing_name = _existing_payment_entry(invoice.name)
+    decision, existing_name = payment_sync_decision(existing_name)
+    if decision == "existing":
+        pe = frappe.get_doc("Payment Entry", existing_name)
+        allocated = sum(
+            decimal_value(row.allocated_amount)
+            for row in pe.references
+            if row.reference_doctype == "Sales Invoice" and row.reference_name == invoice.name
+        )
+        amount = validate_payment_values(order, allocated, invoice.currency)
+        pe = _validate_existing_payment(pe, route, amount, invoice.name)
+        invoice.reload()
+        if decimal_value(invoice.outstanding_amount) != 0:
+            frappe.throw(
+                f"Existing Payment Entry {pe.name} references {invoice.name}, but invoice outstanding is "
+                f"{decimal_value(invoice.outstanding_amount)}, expected 0"
+            )
+        return pe, route, amount, "existing"
+
+    amount = validate_payment_values(order, invoice.outstanding_amount, invoice.currency)
+    from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+
+    pe = get_payment_entry(
+        "Sales Invoice",
+        invoice.name,
+        bank_account=route["clearing_account"],
+        reference_date=_date(order),
+    )
+    pe.mode_of_payment = route["mode_of_payment"]
+    pe.paid_to = route["clearing_account"]
+    pe.reference_no = f"Woo {channel.alias} order {order['id']}"
+    pe.reference_date = _date(order)
+    pe.posting_date = _date(order)
+    pe.remarks = (
+        f"WooCommerce {channel.alias} order {order.get('number') or order['id']} "
+        f"paid via {route['gateway']}"
+    )
+    pe.paid_amount = float(amount)
+    pe.received_amount = float(amount)
+    matched_reference = False
+    for reference in pe.references:
+        if reference.reference_doctype == "Sales Invoice" and reference.reference_name == invoice.name:
+            reference.allocated_amount = float(amount)
+            matched_reference = True
+    if not matched_reference:
+        frappe.throw(f"Payment Entry draft did not include Sales Invoice reference {invoice.name}")
+    pe.insert(ignore_permissions=True)
+    pe.submit()
+    invoice.reload()
+    if decimal_value(invoice.outstanding_amount) != 0:
+        frappe.throw(
+            f"Payment Entry {pe.name} submitted but Sales Invoice {invoice.name} outstanding is "
+            f"{decimal_value(invoice.outstanding_amount)}, expected 0"
+        )
+    return pe, route, amount, "created"
+
+
 def import_paid_order(channel, order, *, client=None):
     order_id = int(order["id"])
     key = f"order:{channel.alias}:{order_id}"
     with frappe.cache.lock(f"bbd-woo:{key}", timeout=300):
-        log = create_log("Order", "Woo to ERP", channel.alias, order_id, key, {"id": order_id, "status": order.get("status")})
+        log = create_log("Order", "Woo to ERP", channel.alias, order_id, key, {
+                "id": order_id,
+                "status": order.get("status"),
+                "date_paid": order.get("date_paid"),
+                "currency": order.get("currency"),
+                "total": order.get("total"),
+                "payment_method": order.get("payment_method"),
+                "payment_method_title": order.get("payment_method_title"),
+            },
+        )
         try:
             if order_id < int(channel.order_floor or 0):
                 finish_log(log, "Skipped", {"reason": "below channel order floor"})
@@ -254,8 +409,35 @@ def import_paid_order(channel, order, *, client=None):
             so = _create_sales_order(channel, order, customer)
             dn = _create_delivery_note(channel, order, so)
             invoice = _create_sales_invoice(channel, order, so)
-            result = {"customer": customer.name, "sales_order": so.name, "delivery_note": dn.name, "sales_invoice": invoice.name}
-            finish_log(log, "Success", result, "Sales Order", so.name)
+            result = {
+                "woo_order_id": order_id,
+                "customer": customer.name,
+                "sales_order": so.name,
+                "delivery_note": dn.name,
+                "sales_invoice": invoice.name,
+                "payment_entry": None,
+                "payment_gateway": None,
+                "payment_amount": None,
+                "payment_status": "disabled",
+            }
+            settings = frappe.get_single("BBD Woo Sync Settings")
+            if payment_entries_are_enabled(settings.payment_entries_enabled):
+                payment_key = payment_idempotency_key(channel.alias, order_id, invoice.name)
+                with frappe.cache.lock(f"bbd-woo:{payment_key}", timeout=300):
+                    pe, route, amount, payment_status = _create_payment_entry(channel, order, invoice)
+                result.update(
+                    {
+                        "payment_entry": pe.name,
+                        "payment_gateway": route["gateway"],
+                        "payment_amount": float(amount),
+                        "payment_status": payment_status,
+                    }
+                )
+            invoice.reload()
+            result["sales_invoice_outstanding"] = float(invoice.outstanding_amount)
+            reference_doctype = "Payment Entry" if result["payment_entry"] else "Sales Invoice"
+            reference_name = result["payment_entry"] or invoice.name
+            finish_log(log, "Success", result, reference_doctype, reference_name)
             return {"status": "success", **result}
         except Exception as exc:
             frappe.db.rollback()
