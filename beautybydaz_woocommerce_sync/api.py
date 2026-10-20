@@ -96,6 +96,7 @@ def enable_sync():
         frappe.db.set_value("BBD Woo Channel", name, "enabled", 1, update_modified=False)
     settings = frappe.get_single("BBD Woo Sync Settings")
     settings.enabled = 1
+    settings.payment_entries_enabled = 1
     settings.save(ignore_permissions=True)
     return health_check()
 
@@ -105,8 +106,9 @@ def disable_sync():
     _system_manager()
     settings = frappe.get_single("BBD Woo Sync Settings")
     settings.enabled = 0
+    settings.payment_entries_enabled = 0
     settings.save(ignore_permissions=True)
-    return {"enabled": False}
+    return {"enabled": False, "payment_entries_enabled": False}
 
 
 @frappe.whitelist()
