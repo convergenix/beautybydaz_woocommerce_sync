@@ -1,10 +1,14 @@
+import unittest
 from types import SimpleNamespace
+from unittest import mock
 
-import pytest
+try:
+    import frappe
+except ImportError:  # pragma: no cover - exercised in the Frappe bench test run
+    frappe = None
 
-frappe = pytest.importorskip("frappe")
-
-from beautybydaz_woocommerce_sync import orders
+if frappe:
+    from beautybydaz_woocommerce_sync import orders
 
 
 class FakeInvoice:
@@ -19,48 +23,57 @@ class FakeInvoice:
         return self
 
 
-def test_existing_payment_entry_reference_is_detected(monkeypatch):
-    monkeypatch.setattr(
-        orders.frappe.db,
-        "sql",
-        lambda *args, **kwargs: [SimpleNamespace(name="ACC-PAY-2026-00001")],
-    )
-    assert orders._existing_payment_entry("ACC-SINV-2026-00045") == "ACC-PAY-2026-00001"
-
-
-def test_duplicate_retry_reuses_valid_submitted_payment_entry(monkeypatch):
-    invoice = FakeInvoice()
-    channel = SimpleNamespace(alias="beautybydaz", company="BeautybyDaz")
-    order = {
-        "id": 158359,
-        "number": "158359",
-        "date_paid": "2026-10-20T10:19:21",
-        "currency": "NGN",
-        "total": "92350.00",
-        "payment_method": "paystack",
-        "payment_method_title": "Paystack Checkout",
-    }
-    pe = SimpleNamespace(
-        name="ACC-PAY-2026-00001",
-        docstatus=1,
-        mode_of_payment="Paystack",
-        paid_to="1121 - Paystack Clearing - BBD",
-        references=[
-            SimpleNamespace(
-                reference_doctype="Sales Invoice",
-                reference_name=invoice.name,
-                allocated_amount=92350,
+@unittest.skipIf(frappe is None, "requires Frappe bench context")
+class PaymentFrappeTests(unittest.TestCase):
+    def test_existing_payment_entry_reference_is_detected(self):
+        with mock.patch.object(
+            orders.frappe.db,
+            "sql",
+            return_value=[SimpleNamespace(name="ACC-PAY-2026-00001")],
+        ):
+            self.assertEqual(
+                orders._existing_payment_entry("ACC-SINV-2026-00045"),
+                "ACC-PAY-2026-00001",
             )
-        ],
-    )
 
-    monkeypatch.setattr(orders, "_validate_payment_master_data", lambda *args: None)
-    monkeypatch.setattr(orders, "_existing_payment_entry", lambda *args: pe.name)
-    monkeypatch.setattr(orders.frappe, "get_doc", lambda doctype, name: pe)
+    def test_duplicate_retry_reuses_valid_submitted_payment_entry(self):
+        invoice = FakeInvoice()
+        channel = SimpleNamespace(alias="beautybydaz", company="BeautybyDaz")
+        order = {
+            "id": 158359,
+            "number": "158359",
+            "date_paid": "2026-10-20T10:19:21",
+            "currency": "NGN",
+            "total": "92350.00",
+            "payment_method": "paystack",
+            "payment_method_title": "Paystack Checkout",
+        }
+        pe = SimpleNamespace(
+            name="ACC-PAY-2026-00001",
+            docstatus=1,
+            mode_of_payment="Paystack",
+            paid_to="1121 - Paystack Clearing - BBD",
+            references=[
+                SimpleNamespace(
+                    reference_doctype="Sales Invoice",
+                    reference_name=invoice.name,
+                    allocated_amount=92350,
+                )
+            ],
+        )
 
-    returned, route, amount, status = orders._create_payment_entry(channel, order, invoice)
+        with (
+            mock.patch.object(orders, "_validate_payment_master_data"),
+            mock.patch.object(orders, "_existing_payment_entry", return_value=pe.name),
+            mock.patch.object(orders.frappe, "get_doc", return_value=pe),
+        ):
+            returned, route, amount, status = orders._create_payment_entry(channel, order, invoice)
 
-    assert returned is pe
-    assert route["gateway"] == "Paystack"
-    assert amount == orders.decimal_value("92350.00")
-    assert status == "existing"
+        self.assertIs(returned, pe)
+        self.assertEqual(route["gateway"], "Paystack")
+        self.assertEqual(amount, orders.decimal_value("92350.00"))
+        self.assertEqual(status, "existing")
+
+
+if __name__ == "__main__":
+    unittest.main()
