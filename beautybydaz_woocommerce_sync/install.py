@@ -20,23 +20,43 @@ CUSTOM_FIELDS = {
     ],
     "Sales Order": [
         {"fieldname": "custom_woocommerce_order_id", "label": "WooCommerce Order ID", "fieldtype": "Data", "insert_after": "po_no", "read_only": 1},
-        {"fieldname": "custom_woocommerce_order_number", "label": "WooCommerce Order Number", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_id", "read_only": 1},
+        {"fieldname": "custom_woocommerce_order_root_id", "label": "WooCommerce Root Order ID", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_id", "read_only": 1},
+        {"fieldname": "custom_bbd_order_amendment", "label": "BBD Order Amendment", "fieldtype": "Link", "options": "BBD Order Amendment", "insert_after": "custom_woocommerce_order_root_id", "read_only": 1},
+        {"fieldname": "custom_woo_customer_name", "label": "Woo Customer Name", "fieldtype": "Data", "insert_after": "custom_bbd_order_amendment", "read_only": 1},
+        {"fieldname": "custom_woo_customer_email", "label": "Woo Customer Email", "fieldtype": "Data", "insert_after": "custom_woo_customer_name", "read_only": 1},
+        {"fieldname": "custom_woo_customer_phone", "label": "Woo Customer Phone", "fieldtype": "Data", "insert_after": "custom_woo_customer_email", "read_only": 1},
+        {"fieldname": "custom_woocommerce_order_number", "label": "WooCommerce Order Number", "fieldtype": "Data", "insert_after": "custom_woo_customer_phone", "read_only": 1},
         {"fieldname": "custom_woo_channel", "label": "Woo Channel", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_number", "read_only": 1},
         {"fieldname": "custom_woo_site", "label": "Woo Site", "fieldtype": "Data", "insert_after": "custom_woo_channel", "read_only": 1},
     ],
     "Delivery Note": [
         {"fieldname": "custom_woocommerce_order_id", "label": "WooCommerce Order ID", "fieldtype": "Data", "insert_after": "po_no", "read_only": 1},
-        {"fieldname": "custom_woocommerce_order_number", "label": "WooCommerce Order Number", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_id", "read_only": 1},
+        {"fieldname": "custom_woocommerce_order_root_id", "label": "WooCommerce Root Order ID", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_id", "read_only": 1},
+        {"fieldname": "custom_bbd_order_amendment", "label": "BBD Order Amendment", "fieldtype": "Link", "options": "BBD Order Amendment", "insert_after": "custom_woocommerce_order_root_id", "read_only": 1},
+        {"fieldname": "custom_woo_customer_name", "label": "Woo Customer Name", "fieldtype": "Data", "insert_after": "custom_bbd_order_amendment", "read_only": 1},
+        {"fieldname": "custom_woo_customer_email", "label": "Woo Customer Email", "fieldtype": "Data", "insert_after": "custom_woo_customer_name", "read_only": 1},
+        {"fieldname": "custom_woo_customer_phone", "label": "Woo Customer Phone", "fieldtype": "Data", "insert_after": "custom_woo_customer_email", "read_only": 1},
+        {"fieldname": "custom_woocommerce_order_number", "label": "WooCommerce Order Number", "fieldtype": "Data", "insert_after": "custom_woo_customer_phone", "read_only": 1},
         {"fieldname": "custom_woocommerce_refund_id", "label": "WooCommerce Refund ID", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_number", "read_only": 1},
         {"fieldname": "custom_woo_channel", "label": "Woo Channel", "fieldtype": "Data", "insert_after": "custom_woocommerce_refund_id", "read_only": 1},
         {"fieldname": "custom_woo_site", "label": "Woo Site", "fieldtype": "Data", "insert_after": "custom_woo_channel", "read_only": 1},
     ],
     "Sales Invoice": [
         {"fieldname": "custom_woocommerce_order_id", "label": "WooCommerce Order ID", "fieldtype": "Data", "insert_after": "po_no", "read_only": 1},
-        {"fieldname": "custom_woocommerce_order_number", "label": "WooCommerce Order Number", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_id", "read_only": 1},
+        {"fieldname": "custom_woocommerce_order_root_id", "label": "WooCommerce Root Order ID", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_id", "read_only": 1},
+        {"fieldname": "custom_bbd_order_amendment", "label": "BBD Order Amendment", "fieldtype": "Link", "options": "BBD Order Amendment", "insert_after": "custom_woocommerce_order_root_id", "read_only": 1},
+        {"fieldname": "custom_woo_customer_name", "label": "Woo Customer Name", "fieldtype": "Data", "insert_after": "custom_bbd_order_amendment", "read_only": 1},
+        {"fieldname": "custom_woo_customer_email", "label": "Woo Customer Email", "fieldtype": "Data", "insert_after": "custom_woo_customer_name", "read_only": 1},
+        {"fieldname": "custom_woo_customer_phone", "label": "Woo Customer Phone", "fieldtype": "Data", "insert_after": "custom_woo_customer_email", "read_only": 1},
+        {"fieldname": "custom_woocommerce_order_number", "label": "WooCommerce Order Number", "fieldtype": "Data", "insert_after": "custom_woo_customer_phone", "read_only": 1},
         {"fieldname": "custom_woocommerce_refund_id", "label": "WooCommerce Refund ID", "fieldtype": "Data", "insert_after": "custom_woocommerce_order_number", "read_only": 1},
         {"fieldname": "custom_woo_channel", "label": "Woo Channel", "fieldtype": "Data", "insert_after": "custom_woocommerce_refund_id", "read_only": 1},
         {"fieldname": "custom_woo_site", "label": "Woo Site", "fieldtype": "Data", "insert_after": "custom_woo_channel", "read_only": 1},
+    ],
+    "Payment Entry": [
+        {"fieldname": "custom_woocommerce_order_root_id", "label": "WooCommerce Root Order ID", "fieldtype": "Data", "insert_after": "reference_date", "read_only": 1},
+        {"fieldname": "custom_bbd_order_amendment", "label": "BBD Order Amendment", "fieldtype": "Link", "options": "BBD Order Amendment", "insert_after": "custom_woocommerce_order_root_id", "read_only": 1},
+        {"fieldname": "custom_woo_channel", "label": "Woo Channel", "fieldtype": "Data", "insert_after": "custom_bbd_order_amendment", "read_only": 1}
     ],
     "Sales Order Item": [{"fieldname": "custom_woocommerce_line_item_id", "label": "WooCommerce Line Item ID", "fieldtype": "Data", "insert_after": "item_code", "read_only": 1}],
     "Delivery Note Item": [{"fieldname": "custom_woocommerce_line_item_id", "label": "WooCommerce Line Item ID", "fieldtype": "Data", "insert_after": "item_code", "read_only": 1}],
@@ -45,15 +65,26 @@ CUSTOM_FIELDS = {
 
 
 def after_install():
+    ensure_role()
     ensure_custom_fields()
     ensure_settings()
     ensure_indexes()
+    backfill_order_roots()
 
 
 def after_migrate():
+    ensure_role()
     ensure_custom_fields()
     ensure_settings()
     ensure_indexes()
+    backfill_order_roots()
+
+
+def ensure_role():
+    if not frappe.db.exists("Role", "BBD Order Amendment Manager"):
+        frappe.get_doc({"doctype": "Role", "role_name": "BBD Order Amendment Manager", "desk_access": 1}).insert(
+            ignore_permissions=True
+        )
 
 
 def ensure_custom_fields():
@@ -71,7 +102,28 @@ def ensure_settings():
         settings.order_poll_limit = 100
     if not settings.reconcile_limit:
         settings.reconcile_limit = 50
+    if not settings.order_amendment_warning_percent:
+        settings.order_amendment_warning_percent = 5
+    if not settings.order_amendment_limit_percent:
+        settings.order_amendment_limit_percent = 20
+    if not settings.order_amendment_max_value_change:
+        settings.order_amendment_max_value_change = 500000
+    if not settings.order_amendment_max_age_days:
+        settings.order_amendment_max_age_days = 30
+    if not settings.order_amendment_require_proof_above:
+        settings.order_amendment_require_proof_above = 50000
     settings.save(ignore_permissions=True)
+
+
+def backfill_order_roots():
+    for doctype in ("Sales Order", "Delivery Note", "Sales Invoice"):
+        table = f"tab{doctype}"
+        frappe.db.sql(
+            f"""UPDATE `{table}`
+                SET custom_woocommerce_order_root_id = custom_woocommerce_order_id
+                WHERE COALESCE(custom_woocommerce_order_root_id, '') = ''
+                  AND COALESCE(custom_woocommerce_order_id, '') != ''"""
+        )
 
 
 def _index_exists(table, name):

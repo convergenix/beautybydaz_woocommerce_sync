@@ -1,0 +1,13 @@
+{
+  "doctype": "Page",
+  "name": "bbd-order-amendment",
+  "page_name": "bbd-order-amendment",
+  "module": "Beauty By Daz WooCommerce Sync",
+  "title": "Order Amendment",
+  "icon": "octicon octicon-pencil",
+  "standard": "Yes",
+  "roles": [
+    {"role": "BBD Order Amendment Manager"},
+    {"role": "System Manager"}
+  ]
+}

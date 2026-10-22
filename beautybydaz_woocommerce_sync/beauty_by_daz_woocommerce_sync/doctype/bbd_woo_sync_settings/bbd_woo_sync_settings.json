@@ -5,7 +5,22 @@
   "custom": 0,
   "issingle": 1,
   "editable_grid": 0,
-  "field_order": ["enabled", "company", "safe_paid_statuses", "order_poll_limit", "reconcile_limit", "alert_recipients", "payment_entries_enabled"],
+  "field_order": [
+    "enabled",
+    "company",
+    "safe_paid_statuses",
+    "order_poll_limit",
+    "reconcile_limit",
+    "alert_recipients",
+    "payment_entries_enabled",
+    "order_amendment_section",
+    "order_amendments_enabled",
+    "order_amendment_warning_percent",
+    "order_amendment_limit_percent",
+    "order_amendment_max_value_change",
+    "order_amendment_max_age_days",
+    "order_amendment_require_proof_above"
+  ],
   "fields": [
     {"fieldname": "enabled", "label": "Enabled", "fieldtype": "Check", "default": "0"},
     {"fieldname": "company", "label": "Company", "fieldtype": "Link", "options": "Company", "reqd": 1},
@@ -13,7 +28,14 @@
     {"fieldname": "order_poll_limit", "label": "Order Poll Limit", "fieldtype": "Int", "default": "100"},
     {"fieldname": "reconcile_limit", "label": "Reconcile Limit", "fieldtype": "Int", "default": "50"},
     {"fieldname": "alert_recipients", "label": "Failure Alert Recipients", "fieldtype": "Small Text", "description": "Comma-separated email addresses."},
-    {"fieldname": "payment_entries_enabled", "label": "Payment Entries Enabled", "fieldtype": "Check", "default": "0", "description": "Create submitted Payment Entries for validated paid Woo orders using explicit gateway mappings."}
+    {"fieldname": "payment_entries_enabled", "label": "Payment Entries Enabled", "fieldtype": "Check", "default": "0", "description": "Create submitted Payment Entries for validated paid Woo orders using explicit gateway mappings."},
+    {"fieldname": "order_amendment_section", "label": "Controlled Order Amendments", "fieldtype": "Section Break"},
+    {"fieldname": "order_amendments_enabled", "label": "Order Amendments Enabled", "fieldtype": "Check", "default": "0", "description": "Allow approved managers to amend Woo orders and rebuild the linked ERP document chain."},
+    {"fieldname": "order_amendment_warning_percent", "label": "Material Change Warning (%)", "fieldtype": "Percent", "default": "5"},
+    {"fieldname": "order_amendment_limit_percent", "label": "Maximum Value Change (%)", "fieldtype": "Percent", "default": "20"},
+    {"fieldname": "order_amendment_max_value_change", "label": "Maximum Absolute Value Change", "fieldtype": "Currency", "default": "500000"},
+    {"fieldname": "order_amendment_max_age_days", "label": "Maximum Order Age (Days)", "fieldtype": "Int", "default": "30"},
+    {"fieldname": "order_amendment_require_proof_above", "label": "Proof Required Above", "fieldtype": "Currency", "default": "50000"}
   ],
   "permissions": [
     {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}

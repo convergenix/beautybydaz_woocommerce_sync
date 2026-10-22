@@ -1,0 +1,35 @@
+{
+  "doctype": "DocType",
+  "name": "BBD Order Amendment Item",
+  "module": "Beauty By Daz WooCommerce Sync",
+  "custom": 0,
+  "istable": 1,
+  "editable_grid": 1,
+  "field_order": [
+    "line_item_id",
+    "action",
+    "old_item_code",
+    "new_item_code",
+    "old_quantity",
+    "new_quantity",
+    "old_rate",
+    "new_rate",
+    "old_tax_class",
+    "new_tax_class"
+  ],
+  "fields": [
+    {"fieldname": "line_item_id", "label": "Woo Line Item ID", "fieldtype": "Data", "read_only": 1, "in_list_view": 1},
+    {"fieldname": "action", "label": "Action", "fieldtype": "Select", "options": "Unchanged\nAdded\nUpdated\nRemoved\nReplaced", "read_only": 1, "in_list_view": 1},
+    {"fieldname": "old_item_code", "label": "Previous Item", "fieldtype": "Link", "options": "Item", "read_only": 1, "in_list_view": 1},
+    {"fieldname": "new_item_code", "label": "Revised Item", "fieldtype": "Link", "options": "Item", "read_only": 1, "in_list_view": 1},
+    {"fieldname": "old_quantity", "label": "Previous Quantity", "fieldtype": "Float", "read_only": 1},
+    {"fieldname": "new_quantity", "label": "Revised Quantity", "fieldtype": "Float", "read_only": 1},
+    {"fieldname": "old_rate", "label": "Previous Rate", "fieldtype": "Currency", "read_only": 1},
+    {"fieldname": "new_rate", "label": "Revised Rate", "fieldtype": "Currency", "read_only": 1},
+    {"fieldname": "old_tax_class", "label": "Previous Tax Class", "fieldtype": "Data", "read_only": 1},
+    {"fieldname": "new_tax_class", "label": "Revised Tax Class", "fieldtype": "Data", "read_only": 1}
+  ],
+  "permissions": [],
+  "sort_field": "idx",
+  "sort_order": "ASC"
+}

@@ -2,3 +2,4 @@
 
 [post_model_sync]
 beautybydaz_woocommerce_sync.patches.v1_0.install_schema
+beautybydaz_woocommerce_sync.patches.v1_1.install_order_amendment

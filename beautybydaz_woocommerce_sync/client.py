@@ -59,6 +59,49 @@ class WooClient:
     def list_refunds(self, order_id: int | str) -> list[dict[str, Any]]:
         return self.request("GET", f"orders/{int(order_id)}/refunds", params={"per_page": 100}) or []
 
+    def update_order(
+        self,
+        order_id: int | str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        body = dict(payload)
+        if idempotency_key:
+            meta_data = list(body.get("meta_data") or [])
+            meta_data.append({"key": "_bbd_amendment_key", "value": idempotency_key})
+            body["meta_data"] = meta_data
+        url = self.base + f"orders/{int(order_id)}"
+        try:
+            response = self.session.request("PUT", url, json=body, timeout=self.timeout)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            readback = self.get_order(order_id)
+            if idempotency_key and any(
+                row.get("key") == "_bbd_amendment_key" and row.get("value") == idempotency_key
+                for row in readback.get("meta_data") or []
+            ):
+                return readback
+            raise WooReadbackError(f"Ambiguous Woo order update for {order_id}; no amendment marker found") from exc
+        if response.status_code < 200 or response.status_code >= 300:
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                readback = self.get_order(order_id)
+                if idempotency_key and any(
+                    row.get("key") == "_bbd_amendment_key" and row.get("value") == idempotency_key
+                    for row in readback.get("meta_data") or []
+                ):
+                    return readback
+            raise WooError(f"Woo HTTP {response.status_code} for PUT orders/{int(order_id)}: {response.text[:500]}")
+        updated = response.json() if response.content else None
+        if not updated or int(updated.get("id") or 0) != int(order_id):
+            readback = self.get_order(order_id)
+            if idempotency_key and any(
+                row.get("key") == "_bbd_amendment_key" and row.get("value") == idempotency_key
+                for row in readback.get("meta_data") or []
+            ):
+                return readback
+            raise WooReadbackError(f"Woo update returned an invalid order response: {safe_summary(updated)}")
+        return self.get_order(order_id)
+
     def get_product(self, product_id: int | str, variation_id: int | str = 0) -> dict[str, Any]:
         return self.request("GET", product_endpoint(product_id, variation_id))
 

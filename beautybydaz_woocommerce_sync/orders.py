@@ -25,12 +25,33 @@ def _field(doc, name, value):
         doc.set(name, value)
 
 
-def _base_fields(doc, channel, order, refund_id=None):
+def _base_fields(
+    doc,
+    channel,
+    order,
+    refund_id=None,
+    *,
+    external_order_id=None,
+    root_order_id=None,
+    amendment=None,
+):
     if not refund_id:
-        _field(doc, "custom_woocommerce_order_id", str(order["id"]))
+        external_order_id = str(external_order_id or order["id"])
+        root_order_id = str(root_order_id or order["id"])
+        _field(doc, "custom_woocommerce_order_id", external_order_id)
+        _field(doc, "custom_woocommerce_order_root_id", root_order_id)
         _field(doc, "custom_woocommerce_order_number", str(order.get("number") or order["id"]))
+        _field(doc, "custom_bbd_order_amendment", amendment)
+        billing = order.get("billing") or {}
+        customer_name = " ".join(
+            value for value in (str(billing.get("first_name") or "").strip(), str(billing.get("last_name") or "").strip()) if value
+        )
+        _field(doc, "custom_woo_customer_name", billing.get("company") or customer_name)
+        _field(doc, "custom_woo_customer_email", str(billing.get("email") or "").strip().lower())
+        _field(doc, "custom_woo_customer_phone", str(billing.get("phone") or "").strip())
     else:
         _field(doc, "custom_woocommerce_refund_id", str(refund_id))
+        _field(doc, "custom_woocommerce_order_root_id", str(root_order_id or order["id"]))
     _field(doc, "custom_woo_channel", channel.alias)
     _field(doc, "custom_woo_site", channel.base_url.rstrip("/"))
 
@@ -41,7 +62,7 @@ def _country_name(code):
     return frappe.db.get_value("Country", {"code": code}, "name") or {"NG": "Nigeria"}.get(code, code)
 
 
-def _customer(channel, order):
+def _customer(channel, order, *, update_master_data=True):
     billing = order.get("billing") or {}
     email = (billing.get("email") or "").strip().lower()
     customer_id = str(order.get("customer_id") or "")
@@ -70,11 +91,12 @@ def _customer(channel, order):
             }
         )
         customer.insert(ignore_permissions=True)
-    _contact(customer, billing, customer_id)
-    _address(customer, billing, customer_id, "Billing")
-    shipping = order.get("shipping") or {}
-    if shipping.get("address_1") or shipping.get("city"):
-        _address(customer, shipping, customer_id, "Shipping")
+    if not name or update_master_data:
+        _contact(customer, billing, customer_id)
+        _address(customer, billing, customer_id, "Billing")
+        shipping = order.get("shipping") or {}
+        if shipping.get("address_1") or shipping.get("city"):
+            _address(customer, shipping, customer_id, "Shipping")
     return customer
 
 
@@ -162,12 +184,46 @@ def _date(order):
     return getdate((order.get("date_paid") or order.get("date_created") or nowdate())[:10])
 
 
-def _create_sales_order(channel, order, customer):
-    existing = frappe.db.get_value(
-        "Sales Order", {"custom_woo_site": channel.base_url.rstrip("/"), "custom_woocommerce_order_id": str(order["id"]), "docstatus": ["<", 2]}, "name"
+def order_lock_key(channel, order_id):
+    return f"bbd-woo:root:{channel.alias}:{int(order_id)}"
+
+
+def active_root_document(doctype, channel, order_id):
+    return_filter = "AND IFNULL(is_return, 0) = 0" if doctype in {"Delivery Note", "Sales Invoice"} else ""
+    rows = frappe.db.sql(
+        f"""
+        SELECT name
+        FROM `tab{doctype}`
+        WHERE custom_woo_site=%s
+          AND docstatus=1
+          AND (custom_woocommerce_order_root_id=%s OR custom_woocommerce_order_id=%s)
+          {return_filter}
+        ORDER BY modified DESC
+        """,
+        (channel.base_url.rstrip("/"), str(order_id), str(order_id)),
+        as_dict=True,
     )
-    if existing:
-        return frappe.get_doc("Sales Order", existing)
+    if len(rows) > 1:
+        frappe.throw(f"Multiple active {doctype} records exist for Woo order {order_id}")
+    return rows[0].name if rows else None
+
+
+def _create_sales_order(
+    channel,
+    order,
+    customer,
+    *,
+    external_order_id=None,
+    root_order_id=None,
+    amendment=None,
+    amended_from=None,
+    document_date=None,
+):
+    external_order_id = str(external_order_id or order["id"])
+    if not amended_from:
+        existing = active_root_document("Sales Order", channel, order["id"])
+        if existing:
+            return frappe.get_doc("Sales Order", existing)
     if decimal_value(order.get("total_tax")):
         frappe.throw(f"Woo order {order['id']} includes tax but no tax mapping is configured")
     so = frappe.get_doc(
@@ -175,17 +231,25 @@ def _create_sales_order(channel, order, customer):
             "doctype": "Sales Order",
             "company": channel.company,
             "customer": customer.name,
-            "transaction_date": _date(order),
-            "delivery_date": _date(order),
+            "transaction_date": getdate(document_date) if document_date else _date(order),
+            "delivery_date": getdate(document_date) if document_date else _date(order),
             "currency": order.get("currency") or frappe.get_cached_value("Company", channel.company, "default_currency"),
             "selling_price_list": channel.price_list,
             "price_list_currency": order.get("currency") or frappe.get_cached_value("Price List", channel.price_list, "currency"),
             "ignore_pricing_rule": 1,
             "items": _items(channel, order),
             "remarks": f"WooCommerce {channel.alias} order {order.get('number') or order['id']}",
+            "amended_from": amended_from,
         }
     )
-    _base_fields(so, channel, order)
+    _base_fields(
+        so,
+        channel,
+        order,
+        external_order_id=external_order_id,
+        root_order_id=root_order_id,
+        amendment=amendment,
+    )
     shipping_total = decimal_value(order.get("shipping_total")) + decimal_value(order.get("shipping_tax"))
     if shipping_total:
         if not channel.shipping_income_account:
@@ -205,16 +269,36 @@ def _create_sales_order(channel, order, customer):
     return so
 
 
-def _create_delivery_note(channel, order, so):
-    existing = frappe.db.get_value(
-        "Delivery Note", {"custom_woo_site": channel.base_url.rstrip("/"), "custom_woocommerce_order_id": str(order["id"]), "docstatus": ["<", 2]}, "name"
-    )
-    if existing:
-        return frappe.get_doc("Delivery Note", existing)
+def _create_delivery_note(
+    channel,
+    order,
+    so,
+    *,
+    external_order_id=None,
+    root_order_id=None,
+    amendment=None,
+    amended_from=None,
+    document_date=None,
+):
+    external_order_id = str(external_order_id or order["id"])
+    if not amended_from:
+        existing = active_root_document("Delivery Note", channel, order["id"])
+        if existing:
+            return frappe.get_doc("Delivery Note", existing)
     from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
 
     dn = make_delivery_note(so.name)
-    _base_fields(dn, channel, order)
+    dn.amended_from = amended_from
+    if document_date:
+        dn.posting_date = getdate(document_date)
+    _base_fields(
+        dn,
+        channel,
+        order,
+        external_order_id=external_order_id,
+        root_order_id=root_order_id,
+        amendment=amendment,
+    )
     for row in dn.items:
         row.warehouse = channel.warehouse
     dn.insert(ignore_permissions=True)
@@ -230,16 +314,36 @@ def _create_delivery_note(channel, order, so):
     return dn
 
 
-def _create_sales_invoice(channel, order, so):
-    existing = frappe.db.get_value(
-        "Sales Invoice", {"custom_woo_site": channel.base_url.rstrip("/"), "custom_woocommerce_order_id": str(order["id"]), "docstatus": ["<", 2]}, "name"
-    )
-    if existing:
-        return frappe.get_doc("Sales Invoice", existing)
+def _create_sales_invoice(
+    channel,
+    order,
+    so,
+    *,
+    external_order_id=None,
+    root_order_id=None,
+    amendment=None,
+    amended_from=None,
+    document_date=None,
+):
+    external_order_id = str(external_order_id or order["id"])
+    if not amended_from:
+        existing = active_root_document("Sales Invoice", channel, order["id"])
+        if existing:
+            return frappe.get_doc("Sales Invoice", existing)
     from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
 
     invoice = make_sales_invoice(so.name)
-    _base_fields(invoice, channel, order)
+    invoice.amended_from = amended_from
+    if document_date:
+        invoice.posting_date = getdate(document_date)
+    _base_fields(
+        invoice,
+        channel,
+        order,
+        external_order_id=external_order_id,
+        root_order_id=root_order_id,
+        amendment=amendment,
+    )
     invoice.update_stock = 0
     invoice.insert(ignore_permissions=True)
     invoice.submit()
@@ -319,10 +423,15 @@ def _create_payment_entry(channel, order, invoice):
             f"Sales Invoice {invoice.name} Woo channel mismatch: "
             f"{getattr(invoice, 'custom_woo_channel', None)!r} != {channel.alias!r}"
         )
-    if str(getattr(invoice, "custom_woocommerce_order_id", "") or "") != str(order["id"]):
+    invoice_order_id = str(
+        getattr(invoice, "custom_woocommerce_order_root_id", "")
+        or getattr(invoice, "custom_woocommerce_order_id", "")
+        or ""
+    )
+    if invoice_order_id != str(order["id"]):
         frappe.throw(
-            f"Sales Invoice {invoice.name} Woo order mismatch: "
-            f"{getattr(invoice, 'custom_woocommerce_order_id', None)!r} != {order['id']!r}"
+            f"Sales Invoice {invoice.name} Woo root-order mismatch: "
+            f"{invoice_order_id!r} != {order['id']!r}"
         )
 
     route = resolve_payment_route(order)
@@ -360,6 +469,8 @@ def _create_payment_entry(channel, order, invoice):
     pe.reference_no = f"Woo {channel.alias} order {order['id']}"
     pe.reference_date = _date(order)
     pe.posting_date = _date(order)
+    _field(pe, "custom_woocommerce_order_root_id", str(order["id"]))
+    _field(pe, "custom_woo_channel", channel.alias)
     pe.remarks = (
         f"WooCommerce {channel.alias} order {order.get('number') or order['id']} "
         f"paid via {route['gateway']}"
@@ -387,7 +498,7 @@ def _create_payment_entry(channel, order, invoice):
 def import_paid_order(channel, order, *, client=None):
     order_id = int(order["id"])
     key = f"order:{channel.alias}:{order_id}"
-    with frappe.cache.lock(f"bbd-woo:{key}", timeout=300):
+    with frappe.cache.lock(order_lock_key(channel, order_id), timeout=300):
         log = create_log("Order", "Woo to ERP", channel.alias, order_id, key, {
                 "id": order_id,
                 "status": order.get("status"),
@@ -450,7 +561,7 @@ def _return_doc(channel, order, refund, doctype, maker):
     existing = frappe.db.get_value(doctype, {"custom_woo_site": channel.base_url.rstrip("/"), "custom_woocommerce_refund_id": target_id, "docstatus": ["<", 2]}, "name")
     if existing:
         return frappe.get_doc(doctype, existing)
-    original = frappe.db.get_value(doctype, {"custom_woo_site": channel.base_url.rstrip("/"), "custom_woocommerce_order_id": str(order["id"]), "docstatus": 1}, "name")
+    original = active_root_document(doctype, channel, order["id"])
     if not original:
         frappe.throw(f"Cannot import refund {target_id}: submitted {doctype} for order {order['id']} was not found")
     doc = maker(original)
@@ -502,7 +613,7 @@ def _return_doc(channel, order, refund, doctype, maker):
 def import_refund(channel, order, refund):
     refund_id = int(refund["id"])
     key = f"refund:{channel.alias}:{refund_id}"
-    with frappe.cache.lock(f"bbd-woo:{key}", timeout=300):
+    with frappe.cache.lock(order_lock_key(channel, order["id"]), timeout=300):
         log = create_log("Refund", "Woo to ERP", channel.alias, refund_id, key, {"order_id": order["id"], "refund_id": refund_id})
         try:
             if decimal_value(refund.get("amount")) <= 0:

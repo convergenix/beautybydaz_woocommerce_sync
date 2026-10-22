@@ -1,0 +1,128 @@
+.bbd-amendment-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-bottom: 32px;
+}
+
+.bbd-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--card-shadow);
+  margin-bottom: 16px;
+  padding: 18px;
+}
+
+.bbd-card-title,
+.bbd-card-title-row {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.bbd-card-title-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.bbd-card-title-row .bbd-card-title {
+  margin-bottom: 0;
+}
+
+.bbd-search-action {
+  align-items: end;
+  display: flex;
+  min-height: 62px;
+}
+
+.bbd-summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.bbd-summary-grid div {
+  background: var(--subtle-fg);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.bbd-summary-grid span {
+  color: var(--text-muted);
+  display: block;
+  font-size: 11px;
+  margin-bottom: 3px;
+  text-transform: uppercase;
+}
+
+.bbd-policy-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+.bbd-item-row {
+  align-items: end;
+  border-bottom: 1px solid var(--border-color);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 2fr) 100px 140px 140px 36px;
+  padding: 8px 0 12px;
+}
+
+.bbd-item-row:last-child {
+  border-bottom: 0;
+}
+
+.bbd-item-removed {
+  opacity: 0.48;
+  text-decoration: line-through;
+}
+
+.bbd-remove-item {
+  font-size: 22px;
+  margin-bottom: 7px;
+  padding: 4px;
+}
+
+.bbd-totals-row {
+  border-top: 1px solid var(--border-color);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.bbd-checkboxes {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.bbd-checkboxes label {
+  font-weight: 400;
+}
+
+.bbd-proof-status {
+  margin: 8px 0;
+}
+
+.bbd-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.bbd-confirm-card pre {
+  max-height: 260px;
+  overflow: auto;
+}
+
+@media (max-width: 768px) {
+  .bbd-item-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .bbd-item-code,
+  .bbd-item-tax {
+    grid-column: 1 / -1;
+  }
+}

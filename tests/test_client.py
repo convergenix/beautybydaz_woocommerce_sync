@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
-from beautybydaz_woocommerce_sync.client import WooClient, WooError
+from beautybydaz_woocommerce_sync.client import WooClient, WooError, WooReadbackError
 
 
 class Response:
@@ -72,3 +72,39 @@ def test_create_product_is_read_back_and_never_trusts_post_only():
     result = client.create_product({"name": "Test", "status": "draft"})
     assert result == {"id": 99, "status": "draft"}
     assert [call[0] for call in session.calls] == ["POST", "GET"]
+
+
+def test_order_update_timeout_reconciles_by_marker_without_second_put():
+    marker = "abc123"
+    session = Session(
+        [
+            requests.Timeout("response lost"),
+            Response(200, {"id": 77, "meta_data": [{"key": "_bbd_amendment_key", "value": marker}]}),
+        ]
+    )
+    client = WooClient(channel(), session=session, sleeper=lambda _: None)
+    result = client.update_order(77, {"status": "processing"}, idempotency_key=marker)
+    assert result["id"] == 77
+    assert [call[0] for call in session.calls] == ["PUT", "GET"]
+
+
+def test_order_update_timeout_without_marker_is_ambiguous_and_not_retried():
+    session = Session([requests.Timeout("response lost"), Response(200, {"id": 77, "meta_data": []})])
+    client = WooClient(channel(), session=session, sleeper=lambda _: None)
+    with pytest.raises(WooReadbackError, match="no amendment marker"):
+        client.update_order(77, {"status": "processing"}, idempotency_key="abc123")
+    assert [call[0] for call in session.calls] == ["PUT", "GET"]
+
+
+def test_order_update_invalid_success_body_uses_marker_readback():
+    marker = "abc123"
+    session = Session(
+        [
+            Response(200, {"unexpected": True}),
+            Response(200, {"id": 77, "meta_data": [{"key": "_bbd_amendment_key", "value": marker}]}),
+        ]
+    )
+    client = WooClient(channel(), session=session, sleeper=lambda _: None)
+    result = client.update_order(77, {"status": "processing"}, idempotency_key=marker)
+    assert result["id"] == 77
+    assert [call[0] for call in session.calls] == ["PUT", "GET"]
