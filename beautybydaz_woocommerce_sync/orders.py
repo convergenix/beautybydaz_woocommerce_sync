@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import frappe
-from frappe.utils import getdate, nowdate
+from frappe.utils import get_datetime, getdate, now_datetime, nowdate
 
 from .audit import create_log, finish_log
 from .client import WooClient
@@ -611,7 +613,13 @@ def _return_doc(channel, order, refund, doctype, maker):
     original = active_root_document(doctype, channel, order["id"])
     if not original:
         frappe.throw(f"Cannot import refund {target_id}: submitted {doctype} for order {order['id']} was not found")
+    original_doc = frappe.get_doc(doctype, original)
     doc = maker(original)
+    original_timestamp = get_datetime(f"{original_doc.posting_date} {original_doc.posting_time or '00:00:00'}")
+    refund_timestamp = max(now_datetime(), original_timestamp + timedelta(seconds=1))
+    doc.set_posting_time = 1
+    doc.posting_date = refund_timestamp.date()
+    doc.posting_time = refund_timestamp.time()
     _base_fields(doc, channel, order, target_id)
     refund_lines = {}
     for detail in refund.get("line_items") or []:

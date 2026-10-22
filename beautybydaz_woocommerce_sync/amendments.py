@@ -767,7 +767,11 @@ def _restore_payload(before: dict[str, Any], after: dict[str, Any]) -> dict[str,
 def _cancel_chain(chain: dict[str, Any]):
     for key in ("payment_entry", "sales_invoice", "delivery_note", "sales_order"):
         doc = chain.get(key)
-        if doc and doc.docstatus == 1:
+        if not doc:
+            continue
+        doc = frappe.get_doc(doc.doctype, doc.name)
+        chain[key] = doc
+        if doc.docstatus == 1:
             doc.flags.ignore_permissions = True
             doc.cancel()
 
