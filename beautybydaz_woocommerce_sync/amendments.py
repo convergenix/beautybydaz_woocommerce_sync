@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, get_datetime, getdate, now_datetime
+from frappe.utils import add_days, cint, getdate, now_datetime
 
 from .amendment_core import (
-    AmendmentValidationError,
     build_woo_update,
     canonical_json,
     change_metrics,
@@ -20,7 +18,6 @@ from .amendment_core import (
     normalize_request,
     order_snapshot,
     payload_hash,
-    payment_state,
     quantity,
 )
 from .client import WooClient
@@ -230,6 +227,52 @@ def _document_summary(chain: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+def _dimension_fieldnames() -> set[str]:
+    fields = {"warehouse", "target_warehouse", "income_account", "expense_account", "cost_center", "project"}
+    if frappe.db.exists("DocType", "Accounting Dimension"):
+        fields.update(
+            row.fieldname
+            for row in frappe.get_all(
+                "Accounting Dimension",
+                filters={"disabled": 0},
+                fields=["fieldname"],
+                limit_page_length=0,
+            )
+            if row.fieldname
+        )
+    return fields
+
+
+def _line_dimension_map(doc) -> dict[str, dict[str, Any]]:
+    fields = _dimension_fieldnames()
+    output: dict[str, dict[str, Any]] = {}
+    for row in doc.items:
+        line_id = str(getattr(row, "custom_woocommerce_line_item_id", "") or "")
+        if not line_id or line_id in output:
+            frappe.throw(_("{0} {1} has missing or duplicate Woo line IDs").format(doc.doctype, doc.name))
+        output[line_id] = {
+            fieldname: row.get(fieldname)
+            for fieldname in fields
+            if row.meta.has_field(fieldname)
+        }
+    return output
+
+
+def _shipping_dimensions(sales_order, shipping_total: Decimal) -> dict[str, Any] | None:
+    if not shipping_total:
+        return None
+    rows = [row for row in sales_order.taxes if money(row.tax_amount)]
+    if len(rows) != 1:
+        frappe.throw(_("Sales Order {0} must have exactly one preserved shipping charge").format(sales_order.name))
+    row = rows[0]
+    fields = _dimension_fieldnames() | {"account_head"}
+    return {
+        fieldname: row.get(fieldname)
+        for fieldname in fields
+        if row.meta.has_field(fieldname)
+    }
+
+
 def _settings_summary(settings) -> dict[str, Any]:
     return {
         "enabled": bool(cint(settings.order_amendments_enabled)),
@@ -400,15 +443,28 @@ def _assert_open_dates(chain: dict[str, Any], company: str):
 
 
 def _assert_stock(channel, chain: dict[str, Any], normalized: dict[str, Any]):
-    old_qty: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    old_qty: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    old_lines: dict[str, tuple[str, str]] = {}
     for row in chain["delivery_note"].items:
-        old_qty[row.item_code] += quantity(row.qty)
-    new_qty: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+        line_id = str(getattr(row, "custom_woocommerce_line_item_id", "") or "")
+        warehouse = str(row.warehouse or "")
+        if not line_id or not warehouse or line_id in old_lines:
+            frappe.throw(_("Delivery Note {0} has missing or duplicate Woo line/warehouse data").format(chain["delivery_note"].name))
+        key = (row.item_code, warehouse)
+        old_lines[line_id] = key
+        old_qty[key] += quantity(row.qty)
+    new_qty: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     for row in normalized["items"]:
-        if quantity(row["quantity"]) > 0:
-            new_qty[row["item_code"]] += quantity(row["quantity"])
-    for item_code in sorted(set(old_qty) | set(new_qty)):
-        increase = new_qty[item_code] - old_qty[item_code]
+        if quantity(row["quantity"]) <= 0:
+            continue
+        key = old_lines.get(row["line_item_id"])
+        if not key or key[0] != row["item_code"]:
+            frappe.throw(_("Woo line {0} does not match the original Delivery Note item").format(row["line_item_id"]))
+        assert key is not None
+        new_qty[key] += quantity(row["quantity"])
+    for item_code, warehouse in sorted(set(old_qty) | set(new_qty)):
+        key = (item_code, warehouse)
+        increase = new_qty[key] - old_qty[key]
         item = frappe.db.get_value(
             "Item",
             item_code,
@@ -420,12 +476,12 @@ def _assert_stock(channel, chain: dict[str, Any], normalized: dict[str, Any]):
         if increase <= 0 or not cint(item.get("is_stock_item")):
             continue
         actual = decimal_value(
-            frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": channel.warehouse}, "actual_qty") or 0
+            frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty") or 0
         )
         if actual < increase:
             frappe.throw(
-                _("Insufficient available stock for {0}: available {1}, amendment increase {2}").format(
-                    item_code, actual, increase
+                _("Insufficient available stock for {0} in {1}: available {2}, amendment increase {3}").format(
+                    item_code, warehouse, actual, increase
                 )
             )
 
@@ -542,7 +598,7 @@ def _prepare(channel_name: str, order_id: int, before_hash: str, amendment: dict
 @frappe.whitelist()
 def preview_order_amendment(channel: str, order_id: int | str, before_hash: str, amendment: str | dict[str, Any]):
     _require_permission()
-    context, normalized, _woo_payload, expected, validation, token = _prepare(
+    context, _normalized, _woo_payload, expected, validation, token = _prepare(
         channel, int(order_id), before_hash, _json_arg(amendment)
     )
     return {
@@ -764,6 +820,21 @@ def _new_payment(channel, order, old_payment, invoice, desired_payment: Decimal,
 def _rebuild_erp(context, revised_order, audit, desired_payment: Decimal):
     chain = context["chain"]
     old_payment = chain.get("payment_entry")
+    so_dimensions = _line_dimension_map(chain["sales_order"])
+    dn_dimensions = _line_dimension_map(chain["delivery_note"])
+    invoice_dimensions = _line_dimension_map(chain["sales_invoice"])
+    shipping_dimensions = _shipping_dimensions(
+        chain["sales_order"],
+        money(revised_order.get("shipping_total")) + money(revised_order.get("shipping_tax")),
+    )
+    original_dates = {
+        "so_transaction": chain["sales_order"].transaction_date,
+        "so_delivery": chain["sales_order"].delivery_date,
+        "dn_date": chain["delivery_note"].posting_date,
+        "dn_time": chain["delivery_note"].posting_time,
+        "invoice_date": chain["sales_invoice"].posting_date,
+        "invoice_time": chain["sales_invoice"].posting_time,
+    }
     _cancel_chain(chain)
     revision_id = f"{revised_order['id']}-A{audit.revision}"
     customer = frappe.get_doc("Customer", chain["sales_order"].customer)
@@ -775,7 +846,10 @@ def _rebuild_erp(context, revised_order, audit, desired_payment: Decimal):
         root_order_id=str(revised_order["id"]),
         amendment=audit.name,
         amended_from=chain["sales_order"].name,
-        document_date=(revised_order.get("date_created") or "")[:10],
+        document_date=original_dates["so_transaction"],
+        delivery_date=original_dates["so_delivery"],
+        line_dimensions=so_dimensions,
+        shipping_dimensions=shipping_dimensions,
     )
     dn = _create_delivery_note(
         context["channel"],
@@ -785,7 +859,10 @@ def _rebuild_erp(context, revised_order, audit, desired_payment: Decimal):
         root_order_id=str(revised_order["id"]),
         amendment=audit.name,
         amended_from=chain["delivery_note"].name,
-        document_date=(revised_order.get("date_created") or "")[:10],
+        document_date=original_dates["dn_date"],
+        document_time=original_dates["dn_time"],
+        line_dimensions=dn_dimensions,
+        allow_negative_stock=False,
     )
     invoice = _create_sales_invoice(
         context["channel"],
@@ -795,10 +872,28 @@ def _rebuild_erp(context, revised_order, audit, desired_payment: Decimal):
         root_order_id=str(revised_order["id"]),
         amendment=audit.name,
         amended_from=chain["sales_invoice"].name,
-        document_date=(revised_order.get("date_created") or "")[:10],
+        document_date=original_dates["invoice_date"],
+        document_time=original_dates["invoice_time"],
+        line_dimensions=invoice_dimensions,
     )
     payment = _new_payment(context["channel"], revised_order, old_payment, invoice, desired_payment, audit.name)
     invoice.reload()
+    if getdate(so.transaction_date) != getdate(original_dates["so_transaction"]):
+        frappe.throw(_("Replacement Sales Order transaction date changed"))
+    if getdate(so.delivery_date) != getdate(original_dates["so_delivery"]):
+        frappe.throw(_("Replacement Sales Order delivery date changed"))
+    if getdate(dn.posting_date) != getdate(original_dates["dn_date"]):
+        frappe.throw(_("Replacement Delivery Note posting date changed"))
+    if getdate(invoice.posting_date) != getdate(original_dates["invoice_date"]):
+        frappe.throw(_("Replacement Sales Invoice posting date changed"))
+    if _line_dimension_map(so) != so_dimensions:
+        frappe.throw(_("Replacement Sales Order dimensions differ from the original"))
+    if _line_dimension_map(dn) != dn_dimensions:
+        frappe.throw(_("Replacement Delivery Note dimensions differ from the original"))
+    if _line_dimension_map(invoice) != invoice_dimensions:
+        frappe.throw(_("Replacement Sales Invoice dimensions differ from the original"))
+    if _shipping_dimensions(so, money(revised_order.get("shipping_total")) + money(revised_order.get("shipping_tax"))) != shipping_dimensions:
+        frappe.throw(_("Replacement shipping accounting dimensions differ from the original"))
     if money(so.grand_total) != money(revised_order.get("total")):
         frappe.throw(_("Revised Sales Order total does not match Woo readback"))
     if money(invoice.grand_total) != money(revised_order.get("total")):

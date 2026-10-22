@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 import frappe
 from frappe.utils import getdate, nowdate
 
@@ -155,7 +153,7 @@ def _address(customer, data, customer_id, address_type):
     return doc
 
 
-def _items(channel, order):
+def _items(channel, order, line_dimensions=None):
     rows = []
     for line in order.get("line_items") or []:
         mapping = get_mapping(channel.alias, int(line["product_id"]), int(line.get("variation_id") or 0))
@@ -163,21 +161,46 @@ def _items(channel, order):
         if qty <= 0:
             frappe.throw(f"Woo line {line.get('id')} has invalid quantity {qty}")
         total = decimal_value(line.get("total")) + decimal_value(line.get("total_tax"))
-        rows.append(
-            {
-                "item_code": mapping.erp_item,
-                "item_name": line.get("name"),
-                "warehouse": channel.warehouse,
-                "qty": float(qty),
-                "rate": float(total / qty),
-                "income_account": channel.income_account,
-                "cost_center": channel.cost_center,
-                "custom_woocommerce_line_item_id": str(line.get("id") or ""),
-            }
-        )
+        line_id = str(line.get("id") or "")
+        row = {
+            "item_code": mapping.erp_item,
+            "item_name": line.get("name"),
+            "warehouse": channel.warehouse,
+            "qty": float(qty),
+            "rate": float(total / qty),
+            "income_account": channel.income_account,
+            "cost_center": channel.cost_center,
+            "custom_woocommerce_line_item_id": line_id,
+        }
+        if line_dimensions is not None:
+            dimensions = line_dimensions.get(line_id)
+            if not dimensions:
+                frappe.throw(f"Woo line {line_id} has no preserved ERP dimensions")
+            row.update(dimensions)
+        rows.append(row)
     if not rows:
         frappe.throw(f"Woo order {order['id']} has no line items")
     return rows
+
+
+def _apply_line_dimensions(doc, line_dimensions):
+    if line_dimensions is None:
+        return
+    ordered_dimensions = list(line_dimensions.items())
+    if len(doc.items) != len(ordered_dimensions):
+        frappe.throw(f"{doc.doctype} item count does not match preserved Woo line dimensions")
+    for index, row in enumerate(doc.items):
+        line_id = str(getattr(row, "custom_woocommerce_line_item_id", "") or "")
+        if not line_id:
+            line_id = ordered_dimensions[index][0]
+            if row.meta.has_field("custom_woocommerce_line_item_id"):
+                row.custom_woocommerce_line_item_id = line_id
+        dimensions = line_dimensions.get(line_id)
+        if not dimensions:
+            frappe.throw(f"ERP row for Woo line {line_id or '?'} has no preserved dimensions")
+        for fieldname, value in dimensions.items():
+            if row.meta.has_field(fieldname):
+                row.set(fieldname, value)
 
 
 def _date(order):
@@ -218,6 +241,9 @@ def _create_sales_order(
     amendment=None,
     amended_from=None,
     document_date=None,
+    delivery_date=None,
+    line_dimensions=None,
+    shipping_dimensions=None,
 ):
     external_order_id = str(external_order_id or order["id"])
     if not amended_from:
@@ -232,12 +258,12 @@ def _create_sales_order(
             "company": channel.company,
             "customer": customer.name,
             "transaction_date": getdate(document_date) if document_date else _date(order),
-            "delivery_date": getdate(document_date) if document_date else _date(order),
+            "delivery_date": getdate(delivery_date or document_date) if (delivery_date or document_date) else _date(order),
             "currency": order.get("currency") or frappe.get_cached_value("Company", channel.company, "default_currency"),
             "selling_price_list": channel.price_list,
             "price_list_currency": order.get("currency") or frappe.get_cached_value("Price List", channel.price_list, "currency"),
             "ignore_pricing_rule": 1,
-            "items": _items(channel, order),
+            "items": _items(channel, order, line_dimensions=line_dimensions),
             "remarks": f"WooCommerce {channel.alias} order {order.get('number') or order['id']}",
             "amended_from": amended_from,
         }
@@ -252,18 +278,19 @@ def _create_sales_order(
     )
     shipping_total = decimal_value(order.get("shipping_total")) + decimal_value(order.get("shipping_tax"))
     if shipping_total:
-        if not channel.shipping_income_account:
-            frappe.throw(f"Woo order {order['id']} has shipping but channel has no Shipping Income Account")
-        so.append(
-            "taxes",
-            {
-                "charge_type": "Actual",
-                "account_head": channel.shipping_income_account,
-                "description": "WooCommerce Shipping",
-                "tax_amount": float(shipping_total),
-                "cost_center": channel.cost_center,
-            },
-        )
+        dimensions = shipping_dimensions or {}
+        account_head = dimensions.get("account_head") or channel.shipping_income_account
+        if not account_head:
+            frappe.throw(f"Woo order {order['id']} has shipping but no preserved Shipping Income Account")
+        tax_row = {
+            "charge_type": "Actual",
+            "account_head": account_head,
+            "description": "WooCommerce Shipping",
+            "tax_amount": float(shipping_total),
+            "cost_center": dimensions.get("cost_center") or channel.cost_center,
+        }
+        tax_row.update({key: value for key, value in dimensions.items() if key not in {"account_head", "cost_center"}})
+        so.append("taxes", tax_row)
     so.insert(ignore_permissions=True)
     so.submit()
     return so
@@ -279,6 +306,9 @@ def _create_delivery_note(
     amendment=None,
     amended_from=None,
     document_date=None,
+    document_time=None,
+    line_dimensions=None,
+    allow_negative_stock=None,
 ):
     external_order_id = str(external_order_id or order["id"])
     if not amended_from:
@@ -291,6 +321,9 @@ def _create_delivery_note(
     dn.amended_from = amended_from
     if document_date:
         dn.posting_date = getdate(document_date)
+        dn.set_posting_time = 1
+    if document_time:
+        dn.posting_time = document_time
     _base_fields(
         dn,
         channel,
@@ -299,10 +332,18 @@ def _create_delivery_note(
         root_order_id=root_order_id,
         amendment=amendment,
     )
-    for row in dn.items:
-        row.warehouse = channel.warehouse
+    if line_dimensions is None:
+        for row in dn.items:
+            row.warehouse = channel.warehouse
+    else:
+        _apply_line_dimensions(dn, line_dimensions)
     dn.insert(ignore_permissions=True)
-    if channel.allow_negative_stock_on_paid_orders:
+    negative_stock_allowed = (
+        bool(channel.allow_negative_stock_on_paid_orders)
+        if allow_negative_stock is None
+        else bool(allow_negative_stock)
+    )
+    if negative_stock_allowed:
         from types import MethodType
         from erpnext.controllers.selling_controller import SellingController
 
@@ -324,6 +365,8 @@ def _create_sales_invoice(
     amendment=None,
     amended_from=None,
     document_date=None,
+    document_time=None,
+    line_dimensions=None,
 ):
     external_order_id = str(external_order_id or order["id"])
     if not amended_from:
@@ -336,6 +379,9 @@ def _create_sales_invoice(
     invoice.amended_from = amended_from
     if document_date:
         invoice.posting_date = getdate(document_date)
+        invoice.set_posting_time = 1
+    if document_time:
+        invoice.posting_time = document_time
     _base_fields(
         invoice,
         channel,
@@ -345,6 +391,7 @@ def _create_sales_invoice(
         amendment=amendment,
     )
     invoice.update_stock = 0
+    _apply_line_dimensions(invoice, line_dimensions)
     invoice.insert(ignore_permissions=True)
     invoice.submit()
     return invoice
