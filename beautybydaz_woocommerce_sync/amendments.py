@@ -271,11 +271,15 @@ def _chain_fingerprint(chain: dict[str, Any]) -> str:
 
 
 def _chain_evidence(chain: dict[str, Any]) -> dict[str, Any]:
-    state = _chain_review_state(chain)
+    fresh_chain = {
+        key: (frappe.get_doc(doc.doctype, doc.name) if doc else None)
+        for key, doc in chain.items()
+    }
+    state = _chain_review_state(fresh_chain)
     return {
         "fingerprint": payload_hash(state),
         "state": state,
-        "documents": _document_summary(chain),
+        "documents": _document_summary(fresh_chain),
     }
 
 
