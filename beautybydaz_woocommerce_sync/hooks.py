@@ -6,6 +6,11 @@ app_email = "ai-agent@convergenix.ng"
 app_license = "MIT"
 required_apps = ["erpnext"]
 
+doctype_js = {
+    "Sales Order": "public/js/sales_order.js",
+    "BBD Order Amendment": "public/js/bbd_order_amendment.js",
+}
+
 after_install = "beautybydaz_woocommerce_sync.install.after_install"
 after_migrate = "beautybydaz_woocommerce_sync.install.after_migrate"
 

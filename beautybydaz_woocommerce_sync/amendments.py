@@ -345,6 +345,58 @@ def get_order_amendment_channels():
 
 
 @frappe.whitelist()
+def start_sales_order_amendment(sales_order: str):
+    _require_permission()
+    _settings(require_enabled=True)
+    sales_order_doc = frappe.get_doc("Sales Order", sales_order)
+    sales_order_doc.check_permission("read")
+    if sales_order_doc.docstatus != 1:
+        frappe.throw(_("Only a submitted Woo-linked Sales Order can be amended"))
+    channel_name = str(sales_order_doc.get("custom_woo_channel") or "").strip()
+    order_id = str(
+        sales_order_doc.get("custom_woocommerce_order_root_id")
+        or sales_order_doc.get("custom_woocommerce_order_id")
+        or ""
+    ).strip()
+    if not channel_name or not order_id.isdigit():
+        frappe.throw(_("Sales Order {0} is not linked to a valid WooCommerce order").format(sales_order_doc.name))
+    context = _fetch_context(channel_name, int(order_id))
+    active_sales_order = context["chain"]["sales_order"]
+    if active_sales_order.name != sales_order_doc.name:
+        frappe.throw(
+            _("Sales Order {0} is not the active document for Woo order {1}; open {2} instead").format(
+                sales_order_doc.name, order_id, active_sales_order.name
+            )
+        )
+    return {
+        "channel": channel_name,
+        "order_id": int(order_id),
+        "sales_order": sales_order_doc.name,
+        "woo_status": context["order"].get("status"),
+        "total": context["order"].get("total"),
+    }
+
+
+@frappe.whitelist()
+def get_pending_amendment(amendment: str):
+    _require_permission()
+    _settings(require_enabled=True)
+    audit = frappe.get_doc("BBD Order Amendment", amendment)
+    audit.check_permission("read")
+    if audit.status != "Pending":
+        frappe.throw(_("Amendment {0} is not pending").format(audit.name))
+    if audit.requested_by != frappe.session.user and "System Manager" not in frappe.get_roles():
+        frappe.throw(_("Only the requesting user or a System Manager can continue this amendment"), frappe.PermissionError)
+    return {
+        "name": audit.name,
+        "channel": audit.channel,
+        "order_id": int(audit.woo_order_id),
+        "before_hash": audit.before_hash,
+        "request": json.loads(audit.requested_payload or "{}"),
+    }
+
+
+@frappe.whitelist()
 def get_mapped_items(doctype, txt, searchfield, start, page_len, filters):
     _require_permission()
     filters = frappe.parse_json(filters) if isinstance(filters, str) else (filters or {})
@@ -598,10 +650,13 @@ def _prepare(channel_name: str, order_id: int, before_hash: str, amendment: dict
 @frappe.whitelist()
 def preview_order_amendment(channel: str, order_id: int | str, before_hash: str, amendment: str | dict[str, Any]):
     _require_permission()
-    context, _normalized, _woo_payload, expected, validation, token = _prepare(
+    context, normalized, _woo_payload, expected, validation, token = _prepare(
         channel, int(order_id), before_hash, _json_arg(amendment)
     )
+    idempotency_key = _amendment_idempotency_key(channel, int(order_id), before_hash, normalized)
+    audit, _already_applied = _create_audit(context, normalized, validation, idempotency_key)
     return {
+        "amendment": audit.name,
         "confirmation_token": token,
         "summary": validation,
         "expected": expected,
@@ -670,6 +725,14 @@ def _create_audit(context, normalized, validation, idempotency_key: str):
         audit = frappe.get_doc("BBD Order Amendment", existing.name)
         if existing.status == "Applied":
             return audit, True
+        if existing.status == "Pending":
+            return audit, False
+        if existing.status == "Rolled Back" and "Manual rollback completed" in (audit.rollback_instructions or ""):
+            frappe.throw(
+                _("Amendment {0} was manually rolled back; start a new amendment with a new approval reason").format(
+                    audit.name
+                )
+            )
         if existing.status in {"Failed", "Rolled Back"}:
             audit.status = "Pending"
             audit.error = None
@@ -821,7 +884,13 @@ def _new_payment(channel, order, old_payment, invoice, desired_payment: Decimal,
     return payment
 
 
-def _rebuild_erp(context, revised_order, audit, desired_payment: Decimal):
+def _rebuild_erp(
+    context,
+    revised_order,
+    audit,
+    desired_payment: Decimal,
+    external_order_id: str | None = None,
+):
     chain = context["chain"]
     old_payment = chain.get("payment_entry")
     so_dimensions = _line_dimension_map(chain["sales_order"])
@@ -840,7 +909,7 @@ def _rebuild_erp(context, revised_order, audit, desired_payment: Decimal):
         "invoice_time": chain["sales_invoice"].posting_time,
     }
     _cancel_chain(chain)
-    revision_id = f"{revised_order['id']}-A{audit.revision}"
+    revision_id = external_order_id or f"{revised_order['id']}-A{audit.revision}"
     customer = frappe.get_doc("Customer", chain["sales_order"].customer)
     so = _create_sales_order(
         context["channel"],
@@ -1106,6 +1175,12 @@ def apply_order_amendment(
         pending_audit = None
         if existing:
             existing_audit = frappe.get_doc("BBD Order Amendment", existing.name)
+            if (
+                existing.status in {"Pending", "Woo Applied"}
+                and existing_audit.requested_by != frappe.session.user
+                and "System Manager" not in frappe.get_roles()
+            ):
+                frappe.throw(_("Amendment {0} belongs to another requester").format(existing_audit.name))
             if existing.status == "Applied":
                 return _applied_response(existing_audit)
             if existing.status in {"Pending", "Woo Applied"}:
@@ -1199,6 +1274,141 @@ def apply_order_amendment(
                 "BBD Order Amendment",
                 audit.name,
                 {"status": rollback_status, "error": error},
+                update_modified=True,
+            )
+            frappe.db.commit()
+            raise
+
+
+@frappe.whitelist()
+def rollback_order_amendment(amendment: str, confirmation: str, reason: str):
+    if "System Manager" not in frappe.get_roles():
+        frappe.throw(_("Only a System Manager can roll back an applied amendment"), frappe.PermissionError)
+    _settings(require_enabled=True)
+    audit = frappe.get_doc("BBD Order Amendment", amendment)
+    audit.check_permission("read")
+    if audit.status != "Applied":
+        frappe.throw(_("Only an Applied amendment can be rolled back"))
+    if str(confirmation or "").strip() != audit.name:
+        frappe.throw(_("Rollback confirmation does not match amendment {0}").format(audit.name))
+    reason = str(reason or "").strip()
+    if len(reason) < 10:
+        frappe.throw(_("Provide a specific rollback reason of at least 10 characters"))
+
+    before_order = json.loads(audit.before_payload or "{}")
+    after_order = json.loads(audit.after_payload or "{}")
+    if not before_order or not after_order:
+        frappe.throw(_("Amendment {0} does not contain complete rollback evidence").format(audit.name))
+
+    channel = _channel(audit.channel)
+    order_id = int(audit.woo_order_id)
+    rollback_key = payload_hash({"operation": "manual-rollback", "amendment": audit.name})
+    with frappe.cache.lock(order_lock_key(channel, order_id), timeout=600):
+        context = _fetch_context(audit.channel, order_id)
+        current_chain = context["chain"]
+        if str(current_chain["sales_order"].get("custom_bbd_order_amendment") or "") != audit.name:
+            frappe.throw(_("The active ERP chain no longer belongs to amendment {0}").format(audit.name))
+
+        current_snapshot = order_snapshot(context["order"], _line_item_codes(channel, context["order"]))
+        after_snapshot = order_snapshot(after_order, _line_item_codes(channel, after_order))
+        current_hash = payload_hash(current_snapshot)
+        after_hash = payload_hash(after_snapshot)
+        resumed_woo_rollback = current_hash == audit.before_hash and _has_amendment_marker(
+            context["order"], rollback_key
+        )
+        if current_hash != after_hash and not resumed_woo_rollback:
+            frappe.throw(_("Woo order changed after amendment {0}; rollback requires manual review").format(audit.name))
+
+        before_snapshot = order_snapshot(before_order, _line_item_codes(channel, before_order))
+        rollback_request = {
+            "items": [
+                {
+                    "line_item_id": row["line_item_id"],
+                    "item_code": row["item_code"],
+                    "quantity": row["quantity"],
+                }
+                for row in before_snapshot["items"]
+            ]
+        }
+        _assert_open_dates(current_chain, channel.company)
+        _assert_stock(channel, current_chain, rollback_request)
+        desired_payment = money(audit.payment_amount_preserved)
+        if _payment_amount(current_chain) != desired_payment:
+            frappe.throw(_("ERP payment allocation changed after amendment {0}").format(audit.name))
+
+        restored_order = context["order"] if resumed_woo_rollback else None
+        try:
+            if not restored_order:
+                restored_order = context["client"].update_order(
+                    order_id,
+                    _restore_payload(before_order, context["order"]),
+                    idempotency_key=rollback_key,
+                )
+            restored_snapshot = order_snapshot(restored_order, _line_item_codes(channel, restored_order))
+            if payload_hash(restored_snapshot) != audit.before_hash:
+                frappe.throw(_("Woo rollback readback does not match the stored before-state"))
+
+            rollback_external_id = f"{order_id}-A{audit.revision}-R"
+            new_chain = _rebuild_erp(
+                context,
+                restored_order,
+                audit,
+                desired_payment,
+                external_order_id=rollback_external_id,
+            )
+            rollback_summary = _document_summary(new_chain)
+            final_order = context["client"].get_order(order_id)
+            final_snapshot = order_snapshot(final_order, _line_item_codes(channel, final_order))
+            if payload_hash(final_snapshot) != audit.before_hash:
+                frappe.throw(_("Final Woo rollback readback does not match the stored before-state"))
+
+            applied_summary = json.loads(audit.resulting_erp_documents or "{}")
+            audit.reload()
+            audit.status = "Rolled Back"
+            audit.after_payload = json.dumps(final_order, indent=2, default=str)
+            audit.resulting_erp_documents = json.dumps(
+                {"applied": applied_summary, "rollback": rollback_summary}, indent=2, default=str
+            )
+            audit.rollback_instructions = (
+                (audit.rollback_instructions or "")
+                + f"\nManual rollback completed by {frappe.session.user} at {now_datetime()}: {reason}"
+            )
+            audit.error = None
+            audit.save(ignore_permissions=True)
+            frappe.db.commit()
+            return {
+                "status": "Rolled Back",
+                "amendment": audit.name,
+                "sales_order": new_chain["sales_order"].name,
+                "delivery_note": new_chain["delivery_note"].name,
+                "sales_invoice": new_chain["sales_invoice"].name,
+                "payment_entry": new_chain["payment_entry"].name if new_chain.get("payment_entry") else None,
+            }
+        except Exception:
+            frappe.db.rollback()
+            recovery_status = "Applied"
+            recovery_note = ""
+            if restored_order:
+                try:
+                    compensated = context["client"].update_order(
+                        order_id,
+                        _restore_payload(after_order, restored_order),
+                        idempotency_key=payload_hash({"operation": "rollback-compensation", "amendment": audit.name}),
+                    )
+                    compensated_snapshot = order_snapshot(compensated, _line_item_codes(channel, compensated))
+                    if payload_hash(compensated_snapshot) != payload_hash(after_snapshot):
+                        recovery_status = "Manual Recovery"
+                        recovery_note = " Woo compensation did not restore the applied state."
+                except Exception as exc:
+                    recovery_status = "Manual Recovery"
+                    recovery_note = f" Woo compensation failed: {exc}"
+            frappe.db.set_value(
+                "BBD Order Amendment",
+                audit.name,
+                {
+                    "status": recovery_status,
+                    "error": frappe.get_traceback() + recovery_note,
+                },
                 update_modified=True,
             )
             frappe.db.commit()
