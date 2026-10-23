@@ -244,6 +244,7 @@ def _document_review_state(doc) -> dict[str, Any] | None:
         state["paid_amount"] = str(money(doc.paid_amount))
         state["received_amount"] = str(money(doc.received_amount))
         state["unallocated_amount"] = str(money(doc.unallocated_amount))
+        state["bank_reconciliations"] = sorted(_bank_reconciliation_rows(doc.name))
         state["references"] = sorted(
             [
                 {
@@ -293,17 +294,12 @@ def _assert_chain_matches_evidence(
     evidence: dict[str, Any],
     amendment_name: str | None = None,
 ):
-    if evidence.get("fingerprint"):
-        if _chain_fingerprint(chain) != evidence["fingerprint"]:
-            frappe.throw(_("The active ERP chain changed after amendment review; start a new review"))
-    else:
-        expected_documents = _evidence_documents(evidence)
-        current_documents = _document_summary(chain)
-        for key in ("sales_order", "delivery_note", "sales_invoice", "payment_entry"):
-            expected = expected_documents.get(key)
-            current = current_documents.get(key)
-            if (expected or {}).get("name") != (current or {}).get("name"):
-                frappe.throw(_("The active ERP chain no longer matches the stored amendment evidence"))
+    if not evidence.get("fingerprint"):
+        frappe.throw(
+            _("Amendment evidence predates exact ERP-chain fingerprints; automatic recovery or rollback is not permitted")
+        )
+    if _chain_fingerprint(chain) != evidence["fingerprint"]:
+        frappe.throw(_("The active ERP chain changed after amendment review; start a new review"))
     if amendment_name:
         for key, doc in chain.items():
             if doc and str(doc.get("custom_bbd_order_amendment") or "") != amendment_name:
@@ -1417,6 +1413,14 @@ def rollback_order_amendment(amendment: str, confirmation: str, reason: str):
         rollback_key = payload_hash({"operation": "manual-rollback", "amendment": audit.name})
         context = _fetch_context(audit.channel, order_id)
         current_chain = context["chain"]
+        payment = current_chain.get("payment_entry")
+        reconciliations = _bank_reconciliation_rows(payment.name if payment else "")
+        if reconciliations:
+            frappe.throw(
+                _("Payment Entry {0} is linked to Bank Transaction(s) {1}; automatic rollback is prohibited").format(
+                    payment.name, ", ".join(reconciliations)
+                )
+            )
 
         before_snapshot = order_snapshot(before_order, _line_item_codes(channel, before_order))
         _rollback_payload, expected = build_woo_update(before_order, normalized, _reverse_mappings(channel))

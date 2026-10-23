@@ -140,6 +140,35 @@ def _add_index(table, name, columns):
         frappe.db.add_index(table.removeprefix("tab"), columns, index_name=name)
 
 
+def _ensure_unique_amendment_revisions():
+    table = "tabBBD Order Amendment"
+    index_name = "uniq_bbd_amendment_revision"
+    if _index_exists(table, index_name):
+        return
+    duplicates = frappe.db.sql(
+        """
+        SELECT channel, woo_order_id, revision, COUNT(*) AS duplicate_count
+        FROM `tabBBD Order Amendment`
+        GROUP BY channel, woo_order_id, revision
+        HAVING COUNT(*) > 1
+        ORDER BY duplicate_count DESC, channel, woo_order_id, revision
+        LIMIT 20
+        """,
+        as_dict=True,
+    )
+    if duplicates:
+        labels = ", ".join(
+            f"{row.channel}/{row.woo_order_id}/r{row.revision} ({row.duplicate_count})"
+            for row in duplicates
+        )
+        frappe.throw(
+            "Cannot create the amendment revision uniqueness constraint because duplicate revisions exist: "
+            + labels
+            + ". Resolve these audit records under controlled review before retrying migration."
+        )
+    _add_unique(table, index_name, ["channel", "woo_order_id", "revision"])
+
+
 def ensure_indexes():
     _add_unique("tabBBD Woo Item Mapping", "uniq_bbd_channel_item", ["channel", "erp_item"])
     _add_unique("tabBBD Woo Item Mapping", "uniq_bbd_channel_product", ["channel", "woo_product_id", "variation_id"])
@@ -151,5 +180,5 @@ def ensure_indexes():
     _add_index("tabSales Invoice", "idx_bbd_woo_si_order", ["custom_woo_site", "custom_woocommerce_order_id"])
     _add_unique("tabDelivery Note", "uniq_bbd_woo_dn_refund", ["custom_woo_site", "custom_woocommerce_refund_id"])
     _add_unique("tabSales Invoice", "uniq_bbd_woo_si_refund", ["custom_woo_site", "custom_woocommerce_refund_id"])
-    _add_unique("tabBBD Order Amendment", "uniq_bbd_amendment_revision", ["channel", "woo_order_id", "revision"])
+    _ensure_unique_amendment_revisions()
     _add_index("tabBBD Woo Sync Log", "idx_bbd_idempotency", ["idempotency_key"])

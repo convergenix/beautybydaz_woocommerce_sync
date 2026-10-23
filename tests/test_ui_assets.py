@@ -34,3 +34,13 @@ def test_amendment_workspace_supports_review_and_rollback_actions():
     assert "chain_fingerprint" in page
     assert "Continue Amendment" in form
     assert "rollback_order_amendment" in form
+
+
+def test_rollback_and_revision_migration_fail_closed():
+    amendments = (PACKAGE / "amendments.py").read_text(encoding="utf-8")
+    installer = (PACKAGE / "install.py").read_text(encoding="utf-8")
+    assert 'state["bank_reconciliations"]' in amendments
+    assert "automatic rollback is prohibited" in amendments
+    assert "evidence predates exact ERP-chain fingerprints" in amendments
+    assert "HAVING COUNT(*) > 1" in installer
+    assert "_ensure_unique_amendment_revisions()" in installer
