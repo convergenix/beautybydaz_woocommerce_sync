@@ -1,5 +1,10 @@
 frappe.pages["bbd-order-amendment"].on_page_load = function (wrapper) {
-  new BBDOrderAmendmentPage(wrapper);
+  wrapper.bbd_order_amendment_app = new BBDOrderAmendmentPage(wrapper);
+};
+
+frappe.pages["bbd-order-amendment"].on_page_show = function (wrapper) {
+  const app = wrapper.bbd_order_amendment_app;
+  if (app) app.ready.then(() => app.load_route_options());
 };
 
 class BBDOrderAmendmentPage {
@@ -17,7 +22,7 @@ class BBDOrderAmendmentPage {
     this.proof_attachment = "";
     this.pending_amendment = "";
     this.render_shell();
-    this.load_channels();
+    this.ready = this.load_channels();
   }
 
   render_shell() {
@@ -65,12 +70,22 @@ class BBDOrderAmendmentPage {
     this.controls.channel.df.options = ["", ...this.channels.map((row) => row.name)].join("\n");
     this.controls.channel.refresh();
     if (this.channels.length === 1) this.controls.channel.set_value(this.channels[0].name);
-    await this.load_route_options();
+  }
+
+  reset_order_context() {
+    this.context = null;
+    this.item_controls = [];
+    this.proof_attachment = "";
+    this.pending_amendment = "";
+    this.wrapper.find(".bbd-alert-area").empty();
+    this.wrapper.find(".bbd-editor").empty();
   }
 
   async load_route_options() {
     const options = frappe.route_options || {};
+    if (!options.amendment && !(options.channel && options.order_id)) return;
     frappe.route_options = null;
+    this.reset_order_context();
     if (options.amendment) {
       const response = await frappe.call({
         method: "beautybydaz_woocommerce_sync.amendments.get_pending_amendment",
@@ -298,31 +313,25 @@ class BBDOrderAmendmentPage {
       freeze_message: __("Validating amendment…"),
     });
     const preview = response.message;
-    this.pending_amendment = preview.amendment || this.pending_amendment;
     const warnings = (preview.summary.warnings || []).map((warning) => `<li>${frappe.utils.escape_html(warning)}</li>`).join("");
     this.wrapper.find(".bbd-preview-area").html(`
       <div class="bbd-card bbd-confirm-card">
         <div class="bbd-card-title">${__("Final Confirmation")}</div>
-        ${this.pending_amendment ? `<p>${__("Amendment record")}: <strong>${frappe.utils.escape_html(this.pending_amendment)}</strong></p>` : ""}
         <p>${frappe.utils.escape_html(preview.confirmation_message)}</p>
         ${warnings ? `<ul class="text-warning">${warnings}</ul>` : ""}
         <pre>${frappe.utils.escape_html(JSON.stringify(preview.summary.previous_documents, null, 2))}</pre>
-        ${this.pending_amendment ? `<button class="btn btn-default btn-sm bbd-open-review">${__("Open Review Record")}</button>` : ""}
         <button class="btn btn-danger btn-sm bbd-apply">${__("Apply Amendment")}</button>
       </div>
     `);
-    this.wrapper.find(".bbd-open-review").on("click", () => {
-      frappe.set_route("Form", "BBD Order Amendment", this.pending_amendment);
-    });
     this.wrapper.find(".bbd-apply").on("click", () => {
       frappe.confirm(
         __("Apply this amendment to WooCommerce and rebuild the linked ERP documents?"),
-        () => this.apply(preview.confirmation_token)
+        () => this.apply(preview.confirmation_token, preview.chain_fingerprint)
       );
     });
   }
 
-  async apply(token) {
+  async apply(token, chain_fingerprint) {
     const response = await frappe.call({
       method: "beautybydaz_woocommerce_sync.amendments.apply_order_amendment",
       args: {
@@ -331,6 +340,7 @@ class BBDOrderAmendmentPage {
         before_hash: this.context.before_hash,
         amendment: JSON.stringify(this.payload()),
         confirmation: token,
+        chain_fingerprint,
       },
       freeze: true,
       freeze_message: __("Applying and verifying amendment…"),

@@ -29,7 +29,8 @@ def test_amendment_workspace_supports_review_and_rollback_actions():
         / "beauty_by_daz_woocommerce_sync/page/bbd_order_amendment/bbd_order_amendment.js"
     ).read_text(encoding="utf-8")
     form = (PACKAGE / "public/js/bbd_order_amendment.js").read_text(encoding="utf-8")
+    assert 'frappe.pages["bbd-order-amendment"].on_page_show' in page
     assert "get_pending_amendment" in page
-    assert "Open Review Record" in page
+    assert "chain_fingerprint" in page
     assert "Continue Amendment" in form
     assert "rollback_order_amendment" in form

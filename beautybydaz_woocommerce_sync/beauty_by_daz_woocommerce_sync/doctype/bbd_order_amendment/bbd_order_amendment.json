@@ -37,6 +37,9 @@
     "after_payload",
     "previous_erp_documents",
     "resulting_erp_documents",
+    "rollback_requested_payload",
+    "rollback_result_payload",
+    "rollback_erp_documents",
     "rollback_instructions",
     "error"
   ],
@@ -70,6 +73,9 @@
     {"fieldname": "after_payload", "label": "Woo After", "fieldtype": "Code", "options": "JSON", "read_only": 1},
     {"fieldname": "previous_erp_documents", "label": "Previous ERP Documents", "fieldtype": "Code", "options": "JSON", "read_only": 1},
     {"fieldname": "resulting_erp_documents", "label": "Resulting ERP Documents", "fieldtype": "Code", "options": "JSON", "read_only": 1},
+    {"fieldname": "rollback_requested_payload", "label": "Rollback Request", "fieldtype": "Code", "options": "JSON", "read_only": 1},
+    {"fieldname": "rollback_result_payload", "label": "Woo Rollback Result", "fieldtype": "Code", "options": "JSON", "read_only": 1},
+    {"fieldname": "rollback_erp_documents", "label": "Rollback ERP Documents", "fieldtype": "Code", "options": "JSON", "read_only": 1},
     {"fieldname": "rollback_instructions", "label": "Rollback Instructions", "fieldtype": "Code", "read_only": 1},
     {"fieldname": "error", "label": "Error", "fieldtype": "Long Text", "read_only": 1}
   ],

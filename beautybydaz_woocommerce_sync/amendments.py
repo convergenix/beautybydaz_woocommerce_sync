@@ -227,6 +227,85 @@ def _document_summary(chain: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+def _document_review_state(doc) -> dict[str, Any] | None:
+    if not doc:
+        return None
+    state = {
+        "doctype": doc.doctype,
+        "name": doc.name,
+        "docstatus": int(doc.docstatus or 0),
+        "modified": str(doc.modified or ""),
+        "status": str(getattr(doc, "status", "") or ""),
+        "woocommerce_order_root_id": str(doc.get("custom_woocommerce_order_root_id") or ""),
+        "woocommerce_order_id": str(doc.get("custom_woocommerce_order_id") or ""),
+        "amendment": str(doc.get("custom_bbd_order_amendment") or ""),
+    }
+    if doc.doctype == "Payment Entry":
+        state["paid_amount"] = str(money(doc.paid_amount))
+        state["received_amount"] = str(money(doc.received_amount))
+        state["unallocated_amount"] = str(money(doc.unallocated_amount))
+        state["references"] = sorted(
+            [
+                {
+                    "doctype": str(row.reference_doctype or ""),
+                    "name": str(row.reference_name or ""),
+                    "allocated_amount": str(money(row.allocated_amount)),
+                }
+                for row in doc.references
+                if money(row.allocated_amount)
+            ],
+            key=lambda row: (row["doctype"], row["name"]),
+        )
+    return state
+
+
+def _chain_review_state(chain: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: _document_review_state(chain.get(key))
+        for key in ("sales_order", "delivery_note", "sales_invoice", "payment_entry")
+    }
+
+
+def _chain_fingerprint(chain: dict[str, Any]) -> str:
+    return payload_hash(_chain_review_state(chain))
+
+
+def _chain_evidence(chain: dict[str, Any]) -> dict[str, Any]:
+    state = _chain_review_state(chain)
+    return {
+        "fingerprint": payload_hash(state),
+        "state": state,
+        "documents": _document_summary(chain),
+    }
+
+
+def _evidence_documents(evidence: dict[str, Any]) -> dict[str, Any]:
+    documents = evidence.get("documents")
+    return documents if isinstance(documents, dict) else evidence
+
+
+def _assert_chain_matches_evidence(
+    chain: dict[str, Any],
+    evidence: dict[str, Any],
+    amendment_name: str | None = None,
+):
+    if evidence.get("fingerprint"):
+        if _chain_fingerprint(chain) != evidence["fingerprint"]:
+            frappe.throw(_("The active ERP chain changed after amendment review; start a new review"))
+    else:
+        expected_documents = _evidence_documents(evidence)
+        current_documents = _document_summary(chain)
+        for key in ("sales_order", "delivery_note", "sales_invoice", "payment_entry"):
+            expected = expected_documents.get(key)
+            current = current_documents.get(key)
+            if (expected or {}).get("name") != (current or {}).get("name"):
+                frappe.throw(_("The active ERP chain no longer matches the stored amendment evidence"))
+    if amendment_name:
+        for key, doc in chain.items():
+            if doc and str(doc.get("custom_bbd_order_amendment") or "") != amendment_name:
+                frappe.throw(_("{0} {1} is not owned by amendment {2}").format(doc.doctype, doc.name, amendment_name))
+
+
 def _dimension_fieldnames() -> set[str]:
     fields = {"warehouse", "target_warehouse", "income_account", "expense_account", "cost_center", "project"}
     if frappe.db.exists("DocType", "Accounting Dimension"):
@@ -631,7 +710,8 @@ def _validate_preview(context: dict[str, Any], normalized: dict[str, Any], expec
         "metrics": {key: str(value) for key, value in metrics.items()},
         "warnings": warnings,
         "desired_payment": str(desired_payment),
-        "previous_documents": _document_summary(chain),
+        "previous_documents": _chain_evidence(chain),
+        "chain_fingerprint": _chain_fingerprint(chain),
         "freeze_dates": _freeze_dates(context["channel"].company),
     }
 
@@ -643,21 +723,21 @@ def _prepare(channel_name: str, order_id: int, before_hash: str, amendment: dict
     normalized = normalize_request(amendment)
     woo_payload, expected = build_woo_update(context["order"], normalized, _reverse_mappings(context["channel"]))
     validation = _validate_preview(context, normalized, expected)
-    token = confirmation_token(before_hash, normalized, frappe.session.user)
+    chain_fingerprint = validation["chain_fingerprint"]
+    approval_hash = payload_hash({"before_hash": before_hash, "chain_fingerprint": chain_fingerprint})
+    token = confirmation_token(approval_hash, normalized, frappe.session.user)
     return context, normalized, woo_payload, expected, validation, token
 
 
 @frappe.whitelist()
 def preview_order_amendment(channel: str, order_id: int | str, before_hash: str, amendment: str | dict[str, Any]):
     _require_permission()
-    context, normalized, _woo_payload, expected, validation, token = _prepare(
+    context, _normalized, _woo_payload, expected, validation, token = _prepare(
         channel, int(order_id), before_hash, _json_arg(amendment)
     )
-    idempotency_key = _amendment_idempotency_key(channel, int(order_id), before_hash, normalized)
-    audit, _already_applied = _create_audit(context, normalized, validation, idempotency_key)
     return {
-        "amendment": audit.name,
         "confirmation_token": token,
+        "chain_fingerprint": validation["chain_fingerprint"],
         "summary": validation,
         "expected": expected,
         "before": context["snapshot"],
@@ -1048,13 +1128,20 @@ def _verify_woo_readback(
         frappe.throw(_("Woo readback status does not match the requested status"))
 
 
-def _amendment_idempotency_key(channel: str, order_id: int, before_hash: str, normalized: dict[str, Any]) -> str:
+def _amendment_idempotency_key(
+    channel: str,
+    order_id: int,
+    before_hash: str,
+    chain_fingerprint: str,
+    normalized: dict[str, Any],
+) -> str:
     return payload_hash(
         {
             "operation": "amend",
             "channel": channel,
             "order_id": order_id,
             "before_hash": before_hash,
+            "chain_fingerprint": chain_fingerprint,
             "request_hash": payload_hash(normalized),
         }
     )
@@ -1068,10 +1155,11 @@ def _has_amendment_marker(order: dict[str, Any], idempotency_key: str) -> bool:
 
 
 def _applied_response(audit):
+    evidence = json.loads(audit.resulting_erp_documents or "{}")
     return {
         "status": "Applied",
         "amendment": audit.name,
-        "erp_documents": json.loads(audit.resulting_erp_documents or "{}"),
+        "erp_documents": _evidence_documents(evidence),
     }
 
 
@@ -1096,6 +1184,8 @@ def _resume_incomplete_amendment(audit, normalized: dict[str, Any], idempotency_
 
     _payload, expected = build_woo_update(before_order, normalized, _reverse_mappings(context["channel"]))
     _verify_woo_readback(current_order, normalized, expected, idempotency_key)
+    previous_evidence = json.loads(audit.previous_erp_documents or "{}")
+    _assert_chain_matches_evidence(context["chain"], previous_evidence)
     if audit.status == "Pending":
         audit.status = "Woo Applied"
         audit.after_payload = json.dumps(current_order, indent=2, default=str)
@@ -1118,7 +1208,7 @@ def _resume_incomplete_amendment(audit, normalized: dict[str, Any], idempotency_
             if rebuild_required
             else context["chain"]
         )
-        result_summary = _document_summary(new_chain)
+        result_summary = _chain_evidence(new_chain)
         readback = context["client"].get_order(int(audit.woo_order_id))
         _verify_woo_readback(readback, normalized, expected, idempotency_key)
         audit.reload()
@@ -1133,7 +1223,7 @@ def _resume_incomplete_amendment(audit, normalized: dict[str, Any], idempotency_
             "status": "Applied",
             "amendment": audit.name,
             "woo_order": order_snapshot(readback, _line_item_codes(context["channel"], readback)),
-            "erp_documents": result_summary,
+            "erp_documents": _evidence_documents(result_summary),
             "warnings": json.loads(audit.warnings_json or "[]"),
         }
     except Exception:
@@ -1155,6 +1245,7 @@ def apply_order_amendment(
     before_hash: str,
     amendment: str | dict[str, Any],
     confirmation: str,
+    chain_fingerprint: str,
 ):
     _require_permission()
     _settings(require_enabled=True)
@@ -1162,10 +1253,13 @@ def apply_order_amendment(
     with frappe.cache.lock(order_lock_key(_channel(channel), order_id), timeout=600):
         amendment_payload = _json_arg(amendment)
         normalized_for_key = normalize_request(amendment_payload)
-        token = confirmation_token(before_hash, normalized_for_key, frappe.session.user)
+        approval_hash = payload_hash({"before_hash": before_hash, "chain_fingerprint": chain_fingerprint})
+        token = confirmation_token(approval_hash, normalized_for_key, frappe.session.user)
         if confirmation != token:
             frappe.throw(_("Preview confirmation is stale. Preview the amendment again."))
-        idempotency_key = _amendment_idempotency_key(channel, order_id, before_hash, normalized_for_key)
+        idempotency_key = _amendment_idempotency_key(
+            channel, order_id, before_hash, chain_fingerprint, normalized_for_key
+        )
         existing = frappe.db.get_value(
             "BBD Order Amendment",
             {"idempotency_key": idempotency_key},
@@ -1192,6 +1286,8 @@ def apply_order_amendment(
         context, normalized, woo_payload, expected, validation, _token = _prepare(
             channel, order_id, before_hash, amendment_payload
         )
+        if validation["chain_fingerprint"] != chain_fingerprint:
+            frappe.throw(_("The ERP document chain changed after preview. Preview the amendment again."))
         if pending_audit:
             audit = pending_audit
             already_applied = False
@@ -1218,7 +1314,7 @@ def apply_order_amendment(
                 new_chain = _rebuild_erp(context, revised_order, audit, desired_payment)
             else:
                 new_chain = context["chain"]
-            result_summary = _document_summary(new_chain)
+            result_summary = _chain_evidence(new_chain)
 
             # Keep the ERP rebuild uncommitted until Woo has passed a fresh final readback.
             readback = context["client"].get_order(order_id)
@@ -1234,7 +1330,7 @@ def apply_order_amendment(
                 "status": "Applied",
                 "amendment": audit.name,
                 "woo_order": order_snapshot(readback, _line_item_codes(context["channel"], readback)),
-                "erp_documents": result_summary,
+                "erp_documents": _evidence_documents(result_summary),
                 "warnings": validation["warnings"],
             }
         except Exception:
@@ -1285,29 +1381,51 @@ def rollback_order_amendment(amendment: str, confirmation: str, reason: str):
     if "System Manager" not in frappe.get_roles():
         frappe.throw(_("Only a System Manager can roll back an applied amendment"), frappe.PermissionError)
     _settings(require_enabled=True)
-    audit = frappe.get_doc("BBD Order Amendment", amendment)
-    audit.check_permission("read")
-    if audit.status != "Applied":
-        frappe.throw(_("Only an Applied amendment can be rolled back"))
-    if str(confirmation or "").strip() != audit.name:
-        frappe.throw(_("Rollback confirmation does not match amendment {0}").format(audit.name))
     reason = str(reason or "").strip()
     if len(reason) < 10:
         frappe.throw(_("Provide a specific rollback reason of at least 10 characters"))
+    initial_audit = frappe.get_doc("BBD Order Amendment", amendment)
+    initial_audit.check_permission("read")
+    if str(confirmation or "").strip() != initial_audit.name:
+        frappe.throw(_("Rollback confirmation does not match amendment {0}").format(initial_audit.name))
 
-    before_order = json.loads(audit.before_payload or "{}")
-    after_order = json.loads(audit.after_payload or "{}")
-    if not before_order or not after_order:
-        frappe.throw(_("Amendment {0} does not contain complete rollback evidence").format(audit.name))
-
-    channel = _channel(audit.channel)
-    order_id = int(audit.woo_order_id)
-    rollback_key = payload_hash({"operation": "manual-rollback", "amendment": audit.name})
+    channel = _channel(initial_audit.channel)
+    order_id = int(initial_audit.woo_order_id)
     with frappe.cache.lock(order_lock_key(channel, order_id), timeout=600):
+        audit = frappe.get_doc("BBD Order Amendment", amendment)
+        if audit.status == "Rolled Back":
+            rollback_evidence = json.loads(audit.rollback_erp_documents or "{}")
+            return {
+                "status": "Rolled Back",
+                "amendment": audit.name,
+                "erp_documents": _evidence_documents(rollback_evidence),
+            }
+        if audit.status != "Applied":
+            frappe.throw(_("Only an Applied amendment can be rolled back"))
+        if audit.channel != initial_audit.channel or int(audit.woo_order_id) != order_id:
+            frappe.throw(_("Amendment identity changed while waiting for the order lock"))
+
+        before_order = json.loads(audit.before_payload or "{}")
+        after_order = json.loads(audit.after_payload or "{}")
+        normalized = normalize_request(json.loads(audit.requested_payload or "{}"))
+        if not before_order or not after_order:
+            frappe.throw(_("Amendment {0} does not contain complete rollback evidence").format(audit.name))
+        rollback_key = payload_hash({"operation": "manual-rollback", "amendment": audit.name})
         context = _fetch_context(audit.channel, order_id)
         current_chain = context["chain"]
-        if str(current_chain["sales_order"].get("custom_bbd_order_amendment") or "") != audit.name:
-            frappe.throw(_("The active ERP chain no longer belongs to amendment {0}").format(audit.name))
+
+        before_snapshot = order_snapshot(before_order, _line_item_codes(channel, before_order))
+        _rollback_payload, expected = build_woo_update(before_order, normalized, _reverse_mappings(channel))
+        changed = _changed(before_snapshot, normalized, expected)
+        rebuild_required = any(
+            changed[key] for key in ("items", "shipping", "discount", "customer", "payment", "value")
+        )
+        applied_evidence = json.loads(audit.resulting_erp_documents or "{}")
+        _assert_chain_matches_evidence(
+            current_chain,
+            applied_evidence,
+            amendment_name=audit.name if rebuild_required else None,
+        )
 
         current_snapshot = order_snapshot(context["order"], _line_item_codes(channel, context["order"]))
         after_snapshot = order_snapshot(after_order, _line_item_codes(channel, after_order))
@@ -1319,22 +1437,22 @@ def rollback_order_amendment(amendment: str, confirmation: str, reason: str):
         if current_hash != after_hash and not resumed_woo_rollback:
             frappe.throw(_("Woo order changed after amendment {0}; rollback requires manual review").format(audit.name))
 
-        before_snapshot = order_snapshot(before_order, _line_item_codes(channel, before_order))
-        rollback_request = {
-            "items": [
-                {
-                    "line_item_id": row["line_item_id"],
-                    "item_code": row["item_code"],
-                    "quantity": row["quantity"],
-                }
-                for row in before_snapshot["items"]
-            ]
-        }
-        _assert_open_dates(current_chain, channel.company)
-        _assert_stock(channel, current_chain, rollback_request)
         desired_payment = money(audit.payment_amount_preserved)
-        if _payment_amount(current_chain) != desired_payment:
-            frappe.throw(_("ERP payment allocation changed after amendment {0}").format(audit.name))
+        if rebuild_required:
+            rollback_request = {
+                "items": [
+                    {
+                        "line_item_id": row["line_item_id"],
+                        "item_code": row["item_code"],
+                        "quantity": row["quantity"],
+                    }
+                    for row in before_snapshot["items"]
+                ]
+            }
+            _assert_open_dates(current_chain, channel.company)
+            _assert_stock(channel, current_chain, rollback_request)
+            if _payment_amount(current_chain) != desired_payment:
+                frappe.throw(_("ERP payment allocation changed after amendment {0}").format(audit.name))
 
         restored_order = context["order"] if resumed_woo_rollback else None
         try:
@@ -1348,27 +1466,37 @@ def rollback_order_amendment(amendment: str, confirmation: str, reason: str):
             if payload_hash(restored_snapshot) != audit.before_hash:
                 frappe.throw(_("Woo rollback readback does not match the stored before-state"))
 
-            rollback_external_id = f"{order_id}-A{audit.revision}-R"
-            new_chain = _rebuild_erp(
-                context,
-                restored_order,
-                audit,
-                desired_payment,
-                external_order_id=rollback_external_id,
-            )
-            rollback_summary = _document_summary(new_chain)
+            if rebuild_required:
+                rollback_external_id = f"{order_id}-A{audit.revision}-R"
+                new_chain = _rebuild_erp(
+                    context,
+                    restored_order,
+                    audit,
+                    desired_payment,
+                    external_order_id=rollback_external_id,
+                )
+            else:
+                new_chain = current_chain
+            rollback_summary = _chain_evidence(new_chain)
             final_order = context["client"].get_order(order_id)
             final_snapshot = order_snapshot(final_order, _line_item_codes(channel, final_order))
             if payload_hash(final_snapshot) != audit.before_hash:
                 frappe.throw(_("Final Woo rollback readback does not match the stored before-state"))
 
-            applied_summary = json.loads(audit.resulting_erp_documents or "{}")
             audit.reload()
             audit.status = "Rolled Back"
-            audit.after_payload = json.dumps(final_order, indent=2, default=str)
-            audit.resulting_erp_documents = json.dumps(
-                {"applied": applied_summary, "rollback": rollback_summary}, indent=2, default=str
+            audit.rollback_requested_payload = json.dumps(
+                {
+                    "requested_by": frappe.session.user,
+                    "requested_at": str(now_datetime()),
+                    "reason": reason,
+                    "woo_payload": _restore_payload(before_order, context["order"]),
+                },
+                indent=2,
+                default=str,
             )
+            audit.rollback_result_payload = json.dumps(final_order, indent=2, default=str)
+            audit.rollback_erp_documents = json.dumps(rollback_summary, indent=2, default=str)
             audit.rollback_instructions = (
                 (audit.rollback_instructions or "")
                 + f"\nManual rollback completed by {frappe.session.user} at {now_datetime()}: {reason}"
@@ -1379,10 +1507,7 @@ def rollback_order_amendment(amendment: str, confirmation: str, reason: str):
             return {
                 "status": "Rolled Back",
                 "amendment": audit.name,
-                "sales_order": new_chain["sales_order"].name,
-                "delivery_note": new_chain["delivery_note"].name,
-                "sales_invoice": new_chain["sales_invoice"].name,
-                "payment_entry": new_chain["payment_entry"].name if new_chain.get("payment_entry") else None,
+                "erp_documents": _evidence_documents(rollback_summary),
             }
         except Exception:
             frappe.db.rollback()

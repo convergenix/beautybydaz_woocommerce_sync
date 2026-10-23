@@ -151,4 +151,5 @@ def ensure_indexes():
     _add_index("tabSales Invoice", "idx_bbd_woo_si_order", ["custom_woo_site", "custom_woocommerce_order_id"])
     _add_unique("tabDelivery Note", "uniq_bbd_woo_dn_refund", ["custom_woo_site", "custom_woocommerce_refund_id"])
     _add_unique("tabSales Invoice", "uniq_bbd_woo_si_refund", ["custom_woo_site", "custom_woocommerce_refund_id"])
+    _add_unique("tabBBD Order Amendment", "uniq_bbd_amendment_revision", ["channel", "woo_order_id", "revision"])
     _add_index("tabBBD Woo Sync Log", "idx_bbd_idempotency", ["idempotency_key"])
