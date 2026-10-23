@@ -161,6 +161,46 @@ def _bank_reconciliation_rows(payment_entry: str) -> list[str]:
     return [row[0] for row in rows]
 
 
+def _lock_payment_reconciliation_state(payment_entry: str):
+    if not payment_entry:
+        return
+    payment = frappe.db.sql(
+        """
+        SELECT name, docstatus, clearance_date
+        FROM `tabPayment Entry`
+        WHERE name=%s
+        FOR UPDATE
+        """,
+        (payment_entry,),
+        as_dict=True,
+    )
+    if not payment:
+        frappe.throw(_("Payment Entry {0} no longer exists").format(payment_entry))
+    if payment[0].docstatus != 1:
+        frappe.throw(_("Payment Entry {0} is no longer submitted; the ERP chain changed").format(payment_entry))
+    reconciliations = frappe.db.sql(
+        """
+        SELECT DISTINCT parent
+        FROM `tabBank Transaction Payments`
+        WHERE payment_document='Payment Entry' AND payment_entry=%s
+        FOR UPDATE
+        """,
+        (payment_entry,),
+    )
+    if payment[0].clearance_date:
+        frappe.throw(
+            _("Payment Entry {0} has clearance date {1}; automatic cancellation is prohibited").format(
+                payment_entry, payment[0].clearance_date
+            )
+        )
+    if reconciliations:
+        frappe.throw(
+            _("Payment Entry {0} is linked to Bank Transaction(s) {1}; automatic cancellation is prohibited").format(
+                payment_entry, ", ".join(row[0] for row in reconciliations)
+            )
+        )
+
+
 def _erp_chain(channel, order_id: int) -> dict[str, Any]:
     sales_orders = _active_parent_rows("Sales Order", channel, order_id)
     if len(sales_orders) != 1:
@@ -244,6 +284,7 @@ def _document_review_state(doc) -> dict[str, Any] | None:
         state["paid_amount"] = str(money(doc.paid_amount))
         state["received_amount"] = str(money(doc.received_amount))
         state["unallocated_amount"] = str(money(doc.unallocated_amount))
+        state["clearance_date"] = str(doc.clearance_date or "")
         state["bank_reconciliations"] = sorted(_bank_reconciliation_rows(doc.name))
         state["references"] = sorted(
             [
@@ -666,6 +707,12 @@ def _validate_preview(context: dict[str, Any], normalized: dict[str, Any], expec
     if order_date < add_days(getdate(now_datetime()), -max_age_days):
         frappe.throw(_("Order is older than the configured amendment window of {0} days").format(max_age_days))
     payment = chain.get("payment_entry")
+    if payment and payment.clearance_date:
+        frappe.throw(
+            _("Payment Entry {0} has clearance date {1}; clearance/reversal review is required outside this tool").format(
+                payment.name, payment.clearance_date
+            )
+        )
     reconciliations = _bank_reconciliation_rows(payment.name if payment else "")
     if reconciliations:
         frappe.throw(
@@ -915,6 +962,10 @@ def _cancel_chain(chain: dict[str, Any]):
         doc = frappe.get_doc(doc.doctype, doc.name)
         chain[key] = doc
         if doc.docstatus == 1:
+            if key == "payment_entry":
+                _lock_payment_reconciliation_state(doc.name)
+                doc = frappe.get_doc(doc.doctype, doc.name)
+                chain[key] = doc
             doc.flags.ignore_permissions = True
             doc.cancel()
 
@@ -1414,6 +1465,12 @@ def rollback_order_amendment(amendment: str, confirmation: str, reason: str):
         context = _fetch_context(audit.channel, order_id)
         current_chain = context["chain"]
         payment = current_chain.get("payment_entry")
+        if payment and payment.clearance_date:
+            frappe.throw(
+                _("Payment Entry {0} has clearance date {1}; automatic rollback is prohibited").format(
+                    payment.name, payment.clearance_date
+                )
+            )
         reconciliations = _bank_reconciliation_rows(payment.name if payment else "")
         if reconciliations:
             frappe.throw(

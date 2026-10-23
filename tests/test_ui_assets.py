@@ -40,7 +40,11 @@ def test_rollback_and_revision_migration_fail_closed():
     amendments = (PACKAGE / "amendments.py").read_text(encoding="utf-8")
     installer = (PACKAGE / "install.py").read_text(encoding="utf-8")
     assert 'state["bank_reconciliations"]' in amendments
+    assert 'state["clearance_date"]' in amendments
+    assert "FOR UPDATE" in amendments
+    assert "_lock_payment_reconciliation_state(doc.name)" in amendments
     assert "automatic rollback is prohibited" in amendments
     assert "evidence predates exact ERP-chain fingerprints" in amendments
     assert "HAVING COUNT(*) > 1" in installer
     assert "_ensure_unique_amendment_revisions()" in installer
+    assert "idx_bbd_payment_reconciliation_guard" in installer
