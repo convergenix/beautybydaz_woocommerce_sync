@@ -11,6 +11,10 @@ doctype_js = {
     "BBD Order Amendment": "public/js/bbd_order_amendment.js",
 }
 
+override_doctype_class = {
+    "Bank Clearance": "beautybydaz_woocommerce_sync.bank_clearance.SafeBankClearance",
+}
+
 after_install = "beautybydaz_woocommerce_sync.install.after_install"
 after_migrate = "beautybydaz_woocommerce_sync.install.after_migrate"
 

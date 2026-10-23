@@ -14,6 +14,17 @@ def test_sales_order_and_amendment_form_scripts_are_registered():
     }
     for relative_path in hooks["doctype_js"].values():
         assert (PACKAGE / relative_path).is_file()
+    assert hooks["override_doctype_class"] == {
+        "Bank Clearance": "beautybydaz_woocommerce_sync.bank_clearance.SafeBankClearance",
+    }
+
+
+def test_bank_clearance_override_revalidates_submitted_payment_under_lock():
+    script = (PACKAGE / "bank_clearance.py").read_text(encoding="utf-8")
+    assert "class SafeBankClearance(BankClearance)" in script
+    assert "WHERE name=%s AND docstatus=1" in script
+    assert "FOR UPDATE" in script
+    assert "is no longer submitted; its clearance date was not changed" in script
 
 
 def test_sales_order_button_uses_secure_server_entrypoint():
