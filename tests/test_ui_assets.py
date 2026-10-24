@@ -35,6 +35,9 @@ def test_sales_order_button_uses_secure_server_entrypoint():
     amendments = (PACKAGE / "amendments.py").read_text(encoding="utf-8")
     assert "_create_or_reuse_pending_audit(context)" in amendments
     assert '"amendment": audit.name' in amendments
+    assert "Apply must use pending amendment" in amendments
+    assert "terminal-amendment-history" in amendments
+    assert "Identical amendment" in amendments
 
 
 def test_amendment_workspace_supports_review_and_rollback_actions():

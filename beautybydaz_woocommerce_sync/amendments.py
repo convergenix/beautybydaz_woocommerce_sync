@@ -961,6 +961,36 @@ def _audit_item_rows(before: dict[str, Any], normalized: dict[str, Any]):
     return rows
 
 
+def _archive_terminal_idempotency(audit, idempotency_key: str):
+    if audit.status == "Rolled Back" and "Manual rollback completed" in (audit.rollback_instructions or ""):
+        frappe.throw(
+            _("Amendment {0} was manually rolled back; start a new amendment with a new approval reason").format(
+                audit.name
+            )
+        )
+    if audit.status not in {"Failed", "Rolled Back"}:
+        frappe.throw(
+            _("Amendment {0} is in recovery state {1}; resolve it before retrying").format(
+                audit.name, audit.status
+            )
+        )
+    historical_key = payload_hash(
+        {
+            "operation": "terminal-amendment-history",
+            "original_idempotency_key": idempotency_key,
+            "amendment": audit.name,
+        }
+    )
+    frappe.db.set_value(
+        "BBD Order Amendment",
+        audit.name,
+        "idempotency_key",
+        historical_key,
+        update_modified=False,
+    )
+    audit.idempotency_key = historical_key
+
+
 def _create_audit(
     context,
     normalized,
@@ -968,33 +998,6 @@ def _create_audit(
     idempotency_key: str,
     pending_amendment: str = "",
 ):
-    existing = frappe.db.get_value(
-        "BBD Order Amendment",
-        {"idempotency_key": idempotency_key},
-        ["name", "status"],
-        as_dict=True,
-    )
-    if existing:
-        audit = frappe.get_doc("BBD Order Amendment", existing.name)
-        if existing.status == "Applied":
-            return audit, True
-        if existing.status == "Pending":
-            return audit, False
-        if existing.status == "Rolled Back" and "Manual rollback completed" in (audit.rollback_instructions or ""):
-            frappe.throw(
-                _("Amendment {0} was manually rolled back; start a new amendment with a new approval reason").format(
-                    audit.name
-                )
-            )
-        if existing.status in {"Failed", "Rolled Back"}:
-            audit.status = "Pending"
-            audit.error = None
-            audit.requested_at = now_datetime()
-            audit.save(ignore_permissions=True)
-            frappe.db.commit()
-            return audit, False
-        frappe.throw(_("Amendment {0} is in recovery state {1}; resolve it before retrying").format(existing.name, existing.status))
-
     metrics = validation["metrics"]
     values = {
         "status": "Pending",
@@ -1022,17 +1025,67 @@ def _create_audit(
         ),
     }
     item_rows = _audit_item_rows(context["snapshot"], normalized)
+    audit = None
     if pending_amendment:
         audit = frappe.get_doc("BBD Order Amendment", pending_amendment)
         audit.check_permission("read")
-        if audit.status != "Pending":
-            frappe.throw(_("Amendment {0} is not pending").format(audit.name))
         if audit.channel != values["channel"] or str(audit.woo_order_id) != values["woo_order_id"]:
             frappe.throw(_("Pending amendment {0} does not belong to this Woo order").format(audit.name))
-        if audit.requested_by != frappe.session.user and "System Manager" not in frappe.get_roles():
+        if audit.requested_by != frappe.session.user:
             frappe.throw(_("Amendment {0} belongs to another requester").format(audit.name), frappe.PermissionError)
         if audit.before_hash != context["before_hash"] or not _pending_chain_matches(audit, validation["previous_documents"]):
             frappe.throw(_("The pending amendment is stale. Start again from the active Sales Order."))
+    else:
+        open_pending = frappe.db.get_value(
+            "BBD Order Amendment",
+            {
+                "channel": values["channel"],
+                "woo_order_id": values["woo_order_id"],
+                "status": "Pending",
+            },
+            "name",
+            order_by="creation asc",
+        )
+        if open_pending:
+            frappe.throw(
+                _("Apply must use pending amendment {0}. Reopen it from the active Sales Order.").format(
+                    open_pending
+                )
+            )
+
+    existing = frappe.db.get_value(
+        "BBD Order Amendment",
+        {"idempotency_key": idempotency_key},
+        ["name", "status"],
+        as_dict=True,
+    )
+    if existing:
+        existing_audit = frappe.get_doc("BBD Order Amendment", existing.name)
+        if audit and existing_audit.name != audit.name:
+            if existing.status in {"Failed", "Rolled Back"}:
+                _archive_terminal_idempotency(existing_audit, idempotency_key)
+            else:
+                frappe.throw(
+                    _("Identical amendment {0} already exists; pending amendment {1} cannot supersede it.").format(
+                        existing_audit.name, audit.name
+                    )
+                )
+        else:
+            audit = existing_audit
+            if audit.requested_by != frappe.session.user:
+                frappe.throw(_("Amendment {0} belongs to another requester").format(audit.name), frappe.PermissionError)
+            if existing.status == "Applied":
+                return audit, True
+            if existing.status in {"Pending", "Woo Applied"}:
+                return audit, False
+            if pending_amendment:
+                frappe.throw(_("Amendment {0} is not pending").format(audit.name))
+            _archive_terminal_idempotency(audit, idempotency_key)
+            audit = None
+
+    if audit:
+        if audit.status != "Pending":
+            frappe.throw(_("Amendment {0} is not pending").format(audit.name))
         audit.update(values)
         audit.set("items", [])
         for row in item_rows:
@@ -1460,47 +1513,64 @@ def apply_order_amendment(
         idempotency_key = _amendment_idempotency_key(
             channel, order_id, before_hash, chain_fingerprint, normalized_for_key
         )
+        pending_name = str(pending_amendment or "").strip()
         existing = frappe.db.get_value(
             "BBD Order Amendment",
             {"idempotency_key": idempotency_key},
             ["name", "status"],
             as_dict=True,
         )
-        pending_audit = None
-        if existing:
+        if existing and existing.status in {"Applied", "Woo Applied", "Pending"}:
             existing_audit = frappe.get_doc("BBD Order Amendment", existing.name)
-            if (
-                existing.status in {"Pending", "Woo Applied"}
-                and existing_audit.requested_by != frappe.session.user
-                and "System Manager" not in frappe.get_roles()
-            ):
-                frappe.throw(_("Amendment {0} belongs to another requester").format(existing_audit.name))
+            if not pending_name:
+                frappe.throw(
+                    _("Apply must use amendment {0}; the browser cannot select another audit record.").format(
+                        existing_audit.name
+                    )
+                )
+            if existing_audit.name != pending_name:
+                frappe.throw(
+                    _("Identical amendment {0} already exists; pending amendment {1} cannot supersede it.").format(
+                        existing_audit.name, pending_name
+                    )
+                )
+            if existing_audit.channel != channel or str(existing_audit.woo_order_id) != str(order_id):
+                frappe.throw(_("Amendment {0} does not belong to this Woo order").format(existing_audit.name))
+            if existing_audit.requested_by != frappe.session.user:
+                frappe.throw(
+                    _("Amendment {0} belongs to another requester").format(existing_audit.name),
+                    frappe.PermissionError,
+                )
             if existing.status == "Applied":
                 return _applied_response(existing_audit)
-            if existing.status in {"Pending", "Woo Applied"}:
-                resumed = _resume_incomplete_amendment(existing_audit, normalized_for_key, idempotency_key)
-                if resumed:
-                    return resumed
-                pending_audit = existing_audit
-
+            resumed = _resume_incomplete_amendment(existing_audit, normalized_for_key, idempotency_key)
+            if resumed:
+                return resumed
         context, normalized, woo_payload, expected, validation, _token = _prepare(
             channel, order_id, before_hash, amendment_payload
         )
         if validation["chain_fingerprint"] != chain_fingerprint:
             frappe.throw(_("The ERP document chain changed after preview. Preview the amendment again."))
-        if pending_audit:
-            audit = pending_audit
-            already_applied = False
-        else:
-            audit, already_applied = _create_audit(
-                context,
-                normalized,
-                validation,
-                idempotency_key,
-                pending_amendment=str(pending_amendment or "").strip(),
-            )
+        audit, already_applied = _create_audit(
+            context,
+            normalized,
+            validation,
+            idempotency_key,
+            pending_amendment=pending_name,
+        )
         if already_applied:
             return _applied_response(audit)
+        if audit.status == "Woo Applied":
+            resumed = _resume_incomplete_amendment(audit, normalized_for_key, idempotency_key)
+            if resumed:
+                return resumed
+            audit.reload()
+            if audit.status != "Pending":
+                frappe.throw(
+                    _("Amendment {0} is in recovery state {1}; resolve it before retrying").format(
+                        audit.name, audit.status
+                    )
+                )
         revised_order = None
         try:
             revised_order = context["client"].update_order(
