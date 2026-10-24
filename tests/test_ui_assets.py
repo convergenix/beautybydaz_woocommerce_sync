@@ -31,7 +31,10 @@ def test_sales_order_button_uses_secure_server_entrypoint():
     script = (PACKAGE / "public/js/sales_order.js").read_text(encoding="utf-8")
     assert '__("Amend Website Order")' in script
     assert "beautybydaz_woocommerce_sync.amendments.start_sales_order_amendment" in script
-    assert 'frappe.set_route("bbd-order-amendment")' in script
+    assert 'frappe.set_route("Form", "BBD Order Amendment", route.amendment)' in script
+    amendments = (PACKAGE / "amendments.py").read_text(encoding="utf-8")
+    assert "_create_or_reuse_pending_audit(context)" in amendments
+    assert '"amendment": audit.name' in amendments
 
 
 def test_amendment_workspace_supports_review_and_rollback_actions():
@@ -42,6 +45,7 @@ def test_amendment_workspace_supports_review_and_rollback_actions():
     form = (PACKAGE / "public/js/bbd_order_amendment.js").read_text(encoding="utf-8")
     assert 'frappe.pages["bbd-order-amendment"].on_page_show' in page
     assert "get_pending_amendment" in page
+    assert "pending_amendment: this.pending_amendment" in page
     assert "chain_fingerprint" in page
     assert "Continue Amendment" in form
     assert "rollback_order_amendment" in form

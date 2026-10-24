@@ -16,12 +16,10 @@ frappe.ui.form.on("Sales Order", {
         freeze_message: __("Validating WooCommerce order and ERP document chain…"),
       });
       const route = response.message || {};
-      frappe.route_options = {
-        channel: route.channel,
-        order_id: route.order_id,
-        sales_order: route.sales_order,
-      };
-      frappe.set_route("bbd-order-amendment");
+      if (!route.amendment) {
+        frappe.throw(__("The server did not create an amendment record."));
+      }
+      frappe.set_route("Form", "BBD Order Amendment", route.amendment);
     }, __("Actions"));
   },
 });

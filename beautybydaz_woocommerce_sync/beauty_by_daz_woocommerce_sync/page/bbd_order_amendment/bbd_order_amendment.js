@@ -341,12 +341,14 @@ class BBDOrderAmendmentPage {
         amendment: JSON.stringify(this.payload()),
         confirmation: token,
         chain_fingerprint,
+        pending_amendment: this.pending_amendment || "",
       },
       freeze: true,
       freeze_message: __("Applying and verifying amendment…"),
     });
     const result = response.message;
     this.show_alert(`${__("Amendment applied")}: ${result.amendment}`, "green");
+    this.pending_amendment = "";
     this.wrapper.find(".bbd-preview-area").empty();
     await this.fetch_order();
   }
