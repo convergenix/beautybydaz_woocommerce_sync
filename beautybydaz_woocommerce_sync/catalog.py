@@ -87,13 +87,26 @@ def _image_url(item):
     return item.image if item.image.startswith(("http://", "https://")) else get_url(item.image)
 
 
+def _new_item_skip_reason(item):
+    if getattr(item, "disabled", 0):
+        return "item is disabled"
+    if not getattr(item, "is_sales_item", 0):
+        return "item is not for sale"
+    if getattr(item, "has_variants", 0):
+        return "item is a variant template"
+    if getattr(item, "variant_of", None):
+        return "item is a variant child"
+    return None
+
+
 def create_draft_product(item_code, channel):
     existing = get_item_mappings(item_code, channel.alias)
     if existing:
         return {"status": "exists", "mapping": existing[0].name}
     item = frappe.get_doc("Item", item_code)
-    if item.disabled or not item.is_sales_item or item.has_variants:
-        return {"status": "skipped", "reason": "item is disabled, not for sale, or is a variant template"}
+    skip_reason = _new_item_skip_reason(item)
+    if skip_reason:
+        return {"status": "skipped", "reason": skip_reason}
     warnings = []
     rate = item_price(item_code, channel.price_list)
     image = _image_url(item)
